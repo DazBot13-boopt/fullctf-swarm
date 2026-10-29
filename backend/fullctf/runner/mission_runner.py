@@ -34,6 +34,7 @@ from ..models.evidence import ConfidenceLevel, Evidence
 from ..models.flag import FlagCandidate, FlagStatus
 from ..models.mission import Mission, MissionStatus, can_transition
 from ..verifier.flag_verifier import FlagVerifier, extract_flags
+from ..verifier.injection_guard import is_suspicious_flag, partition_candidates
 
 
 class FlagSubmitter(Protocol):
@@ -63,6 +64,7 @@ class MissionOutcome:
     submitted: bool = False
     accepted: bool = False
     needs_human_approval: bool = False
+    decoys_detected: int = 0  # flags-leurres d'injection détectés et écartés
     notes: str = ""
 
 
@@ -137,7 +139,7 @@ class MissionRunner:
             outcome.notes = "exécution de l'agent échouée"
             return outcome
 
-        # 4. Extraire un flag candidat.
+        # 4. Extraire les flags candidats + écarter les leurres d'injection.
         candidates = extract_flags(result.output)
         if not candidates:
             self._set(mission, MissionStatus.COMPLETED)
@@ -145,8 +147,22 @@ class MissionRunner:
             outcome.notes = "aucun flag trouvé"
             return outcome
 
+        safe, suspicious = partition_candidates(candidates)
+        outcome.decoys_detected = len(suspicious)
+
+        if not safe:
+            # Tous les candidats sont des leurres d'injection : on ne retient RIEN
+            # automatiquement. L'humain tranche (jamais de soumission auto d'un leurre).
+            self._set(mission, MissionStatus.COMPLETED)
+            outcome.status = mission.status
+            outcome.notes = (
+                f"{len(suspicious)} flag(s) suspect(s) d'injection écarté(s), "
+                "aucun flag fiable (analyse humaine requise)"
+            )
+            return outcome
+
         flag = FlagCandidate(
-            challenge_id=challenge.id, value=candidates[0], source_mission=mission.id
+            challenge_id=challenge.id, value=safe[0], source_mission=mission.id
         )
 
         # 5. Vérifier le format.
@@ -180,6 +196,13 @@ class MissionRunner:
         outcome: MissionOutcome,
     ) -> None:
         policy = mission.autonomy_policy
+
+        # Ceinture de sécurité : un flag suspect d'injection n'est JAMAIS soumis auto.
+        if is_suspicious_flag(flag.value):
+            self._set(mission, MissionStatus.COMPLETED)
+            outcome.status = mission.status
+            outcome.notes = "flag suspect d'injection : soumission auto refusée"
+            return
 
         # Un flag doit être reproduit avant toute soumission automatique.
         reproduced = flag.validation_status == FlagStatus.REPRODUCED
