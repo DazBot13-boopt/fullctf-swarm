@@ -19,6 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from ..models.challenge import Category, Difficulty
+from ..persistence.sqlite_store import DocStore
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -57,13 +58,25 @@ class SearchResult(BaseModel):
 
 
 class MemoryStore:
-    """Dépôt d'expériences avec recherche lexicale pondérée."""
+    """Dépôt d'expériences avec recherche lexicale pondérée.
 
-    def __init__(self) -> None:
+    Persistance optionnelle : si un DocStore est fourni, les entrées sont écrites
+    (write-through) et rechargées au démarrage. Sans store, tout en mémoire.
+    """
+
+    def __init__(self, store: DocStore | None = None, collection: str = "memory") -> None:
+        self._store = store
+        self._collection = collection
         self._entries: dict[str, MemoryEntry] = {}
+        if store is not None:
+            for data in store.list(collection):
+                e = MemoryEntry.model_validate(data)
+                self._entries[e.id] = e
 
     def add(self, entry: MemoryEntry) -> MemoryEntry:
         self._entries[entry.id] = entry
+        if self._store is not None:
+            self._store.put(self._collection, entry.id, entry.model_dump(mode="json"))
         return entry
 
     def get(self, entry_id: str) -> MemoryEntry:

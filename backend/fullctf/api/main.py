@@ -35,8 +35,8 @@ _STORE = SqliteDocStore(_DB_PATH)
 
 _CHALLENGE_REPO = ChallengeRepository(_STORE)
 _MISSION_REPO = MissionRepository(_STORE)
-_EVIDENCE = EvidenceStore()
-_MEMORY = MemoryStore()
+_EVIDENCE = EvidenceStore(_STORE)
+_MEMORY = MemoryStore(_STORE)
 _SUPERVISOR = SupervisorService(_EVIDENCE)
 
 _FRONTEND_DIR = Path(__file__).resolve().parents[3] / "frontend"

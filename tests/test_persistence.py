@@ -1,7 +1,9 @@
 """Tests de la persistance (SQLite store + repositories)."""
 
+from fullctf.evidence import EvidenceStore
+from fullctf.memory import MemoryEntry, MemoryStore
 from fullctf.models.challenge import Category, Challenge, Difficulty
-from fullctf.models.evidence import Evidence
+from fullctf.models.evidence import Evidence, VerificationStatus
 from fullctf.models.mission import AgentProvider, Mission
 from fullctf.persistence import (
     ChallengeRepository,
@@ -105,3 +107,34 @@ def test_evidence_repo():
     repo.save(e)
     assert repo.get(e.id).observation == "obs"
     assert len(repo.for_challenge("c1")) == 1
+
+
+# --- Write-through des stores sur le même fichier (survie au redémarrage) ---
+
+def test_evidence_store_write_through(tmp_path):
+    db = str(tmp_path / "ev.db")
+    store1 = SqliteDocStore(db)
+    es1 = EvidenceStore(store1)
+    e = es1.add(Evidence(challenge_id="c1", mission_id="m1", source="s", observation="o"))
+    es1.mark(e.id, VerificationStatus.VERIFIED)
+    store1.close()
+
+    # Nouveau store sur le même fichier : la preuve vérifiée est rechargée.
+    es2 = EvidenceStore(SqliteDocStore(db))
+    assert len(es2.verified("c1")) == 1
+
+
+def test_memory_store_write_through(tmp_path):
+    db = str(tmp_path / "mem.db")
+    store1 = SqliteDocStore(db)
+    ms1 = MemoryStore(store1)
+    ms1.add(MemoryEntry(
+        challenge_title="Baby RSA", category=Category.CRYPTO,
+        summary="factorisation de n", tools_used=["sagemath"],
+    ))
+    store1.close()
+
+    # Rechargé depuis le fichier, la recherche fonctionne toujours.
+    ms2 = MemoryStore(SqliteDocStore(db))
+    results = ms2.search("rsa factorisation")
+    assert results and results[0].entry.challenge_title == "Baby RSA"
