@@ -69,7 +69,7 @@ vrais CLI. Voir `SPRINT_0.md` et `scripts/sprint0_audit.sh`.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest                                   # 124 tests
+pytest                                   # 136 tests
 uvicorn fullctf.api.main:app --app-dir backend  # API + dashboard sur /
 bash scripts/sprint0_audit.sh            # audit environnement (lecture seule)
 ```
