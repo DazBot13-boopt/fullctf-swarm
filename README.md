@@ -10,16 +10,24 @@ avec preuves vérifiables et rapports reproductibles.
 
 ## État du projet
 
-**Sprint 1 — Structure & API minimale** (en cours)
+**Backend complet (Sprints 1–11)** — 101 tests passent. Le squelette produit est
+codé et testé avec des mocks. Reste le **Sprint 0** (sur VPS) : audit CAO/CAI +
+branchement des vrais CLI.
 
-Déjà en place :
-- Modèles de données : `Challenge`, `Mission`, `Evidence`, `FlagCandidate`
-- Policies : `AutonomyPolicy` (auto-submit, checkpoints, mode local/connecté),
-  `ToolAccessPolicy` (install libre + image fat)
-- Machines à états (mission + flag) avec transitions contrôlées
-- Interface `AgentAdapter` (Multi-CLI, config flexible 1/2/3 agents)
-- API FastAPI minimale (health + import de challenges)
-- Tests unitaires
+| Sprint | Module | État |
+|---|---|---|
+| 1 | Modèles, policies, API, machines à états | ✅ |
+| 2 | Local Solver (import, workspaces isolés) | ✅ |
+| 3 | Adaptateurs agents + registre flexible 1/2/3 | ✅ |
+| 4 | Commander (classification, allocation, escalade, garde-fous) | ✅ |
+| 5 | Expert Tool Engine + sandbox + image fat (Dockerfile) | ✅ |
+| 6 | Evidence Store + Flag Verifier + Reports | ✅ |
+| 7 | Collaboration + débat + playbooks | ✅ |
+| 8 | Mémoire / RAG lexical | ✅ |
+| 9 | Dashboard + Supervisor Chat (hybride) | ✅ |
+| 10 | Connecteur CTFd + Local Executor | ✅ |
+| 11 | Benchmarks systématiques | ✅ |
+| 0 | Audit CAO/CAI + vrais CLI (**à faire sur VPS**) | ⏳ |
 
 ## Installation
 
