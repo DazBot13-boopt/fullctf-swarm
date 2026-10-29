@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FullCTF Swarm — Control Center</title>
+  <style>
+    :root {
+      --bg: #0d1117; --panel: #161b22; --border: #30363d;
+      --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+      --ok: #3fb950; --warn: #d29922; --err: #f85149;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 16px;
+    }
+    header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    header h1 { font-size: 1.3rem; margin: 0; }
+    .pill { font-size: .75rem; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+    .pill.ok { color: var(--ok); border-color: var(--ok); }
+    .pill.err { color: var(--err); border-color: var(--err); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .card h2 { font-size: .95rem; margin: 0 0 12px; color: var(--accent); }
+    .stat-row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .stat { flex: 1; min-width: 80px; }
+    .stat .num { font-size: 1.6rem; font-weight: 700; }
+    .stat .lbl { font-size: .75rem; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; }
+    .tag { font-size: .7rem; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); }
+    .tag.running { color: var(--accent); border-color: var(--accent); }
+    .tag.completed { color: var(--ok); border-color: var(--ok); }
+    .tag.failed { color: var(--err); border-color: var(--err); }
+    .tag.blocked { color: var(--warn); border-color: var(--warn); }
+    input, button { font: inherit; }
+    input {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 8px; border-radius: 6px; width: 100%;
+    }
+    button {
+      background: var(--accent); color: #fff; border: 0; padding: 8px 14px;
+      border-radius: 6px; cursor: pointer; margin-top: 8px;
+    }
+    button:hover { opacity: .9; }
+    .empty { color: var(--muted); font-size: .85rem; }
+    footer { margin-top: 24px; color: var(--muted); font-size: .75rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🧩 FullCTF Swarm — Control Center</h1>
+    <span id="status" class="pill">connexion…</span>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Vue d'ensemble</h2>
+      <div class="stat-row">
+        <div class="stat"><div class="num" id="m-total">–</div><div class="lbl">Missions</div></div>
+        <div class="stat"><div class="num" id="m-active">–</div><div class="lbl">Actives</div></div>
+        <div class="stat"><div class="num" id="m-done">–</div><div class="lbl">Terminées</div></div>
+        <div class="stat"><div class="num" id="m-failed">–</div><div class="lbl">Échouées</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Challenges</h2>
+      <table><thead><tr><th>Titre</th><th>Catégorie</th><th>Difficulté</th></tr></thead>
+        <tbody id="challenges"><tr><td colspan="3" class="empty">Chargement…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Missions & agents</h2>
+      <table><thead><tr><th>Agent</th><th>Profil</th><th>Statut</th><th>Preuves</th></tr></thead>
+        <tbody id="missions"><tr><td colspan="4" class="empty">Chargement…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Mémoire (RAG lexical)</h2>
+      <input id="mem-q" placeholder="ex: rsa factorisation…" />
+      <button onclick="searchMemory()">Rechercher</button>
+      <table style="margin-top:12px"><thead><tr><th>Expérience</th><th>Cat.</th><th>Score</th></tr></thead>
+        <tbody id="memory"><tr><td colspan="3" class="empty">Aucune recherche.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    FullCTF Swarm · supervision en lecture seule · toute action passe par le Commander.
+  </footer>
+
+  <script>
+    async function j(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+    async function refresh() {
+      const st = document.getElementById('status');
+      try {
+        const h = await j('/health');
+        st.textContent = 'API ' + h.status; st.className = 'pill ok';
+      } catch { st.textContent = 'API hors ligne'; st.className = 'pill err'; return; }
+
+      try {
+        const snap = await j('/supervisor/snapshot');
+        document.getElementById('m-total').textContent = snap.total_missions;
+        document.getElementById('m-active').textContent = snap.active_missions;
+        document.getElementById('m-done').textContent = snap.completed_missions;
+        document.getElementById('m-failed').textContent = snap.failed_missions;
+
+        const mt = document.getElementById('missions');
+        mt.innerHTML = snap.missions.length ? snap.missions.map(m => `
+          <tr><td>${m.provider}</td><td>${m.profile}</td>
+          <td><span class="tag ${m.blocked ? 'blocked' : m.status}">${m.blocked ? 'bloquée' : m.status}</span></td>
+          <td>${m.verified_evidence_count}/${m.evidence_count}</td></tr>`).join('')
+          : '<tr><td colspan="4" class="empty">Aucune mission.</td></tr>';
+      } catch {}
+
+      try {
+        const ch = await j('/challenges');
+        const ct = document.getElementById('challenges');
+        ct.innerHTML = ch.length ? ch.map(c => `
+          <tr><td>${c.title}</td><td>${c.category}</td><td>${c.difficulty}</td></tr>`).join('')
+          : '<tr><td colspan="3" class="empty">Aucun challenge importé.</td></tr>';
+      } catch {}
+    }
+
+    async function searchMemory() {
+      const q = document.getElementById('mem-q').value.trim();
+      const tb = document.getElementById('memory');
+      if (!q) { tb.innerHTML = '<tr><td colspan="3" class="empty">Saisis une requête.</td></tr>'; return; }
+      try {
+        const res = await j('/memory/search?q=' + encodeURIComponent(q));
+        tb.innerHTML = res.length ? res.map(r => `
+          <tr><td>${r.title}</td><td>${r.category}</td><td>${r.score}</td></tr>`).join('')
+          : '<tr><td colspan="3" class="empty">Aucun résultat.</td></tr>';
+      } catch { tb.innerHTML = '<tr><td colspan="3" class="empty">Erreur de recherche.</td></tr>'; }
+    }
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>

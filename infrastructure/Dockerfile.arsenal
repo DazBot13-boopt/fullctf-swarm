@@ -57,10 +57,19 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     pycryptodome \
     sympy \
     gmpy2 \
+    fpylll \
     requests \
     volatility3 \
     capstone unicorn keystone-engine \
+    qiling \
+    scapy \
+    mitmproxy \
     pwndbg \
+    || true
+
+# --- Playwright (web dynamique / XSS / JS) + navigateur Chromium ---
+RUN pip3 install --no-cache-dir --break-system-packages playwright \
+    && python3 -m playwright install --with-deps chromium \
     || true
 
 # --- Outils Ruby (stégano PNG) ---
