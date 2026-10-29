@@ -63,6 +63,9 @@ class Mission(BaseModel):
         description="Profil endossé : web, pwn, crypto, reverse, forensic...",
     )
     objective: str = ""
+    playbook_id: str | None = Field(
+        default=None, description="Playbook sélectionné pour guider la mission."
+    )
     allowed_tools: list[str] = Field(default_factory=list)
     resource_budget: ResourceBudget = Field(default_factory=ResourceBudget)
     time_budget_seconds: int = Field(default=1800, description="Temps max en secondes.")

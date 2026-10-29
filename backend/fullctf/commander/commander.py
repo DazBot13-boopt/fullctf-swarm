@@ -48,10 +48,15 @@ class Commander:
         *,
         default_autonomy: AutonomyPolicy | None = None,
         default_tools: ToolAccessPolicy | None = None,
+        playbook_registry=None,
+        tool_registry=None,
     ) -> None:
         self.registry = registry
         self.default_autonomy = default_autonomy or AutonomyPolicy()
         self.default_tools = default_tools or ToolAccessPolicy()
+        # Optionnels : s'ils sont fournis, plan() branche playbook + outils.
+        self.playbook_registry = playbook_registry
+        self.tool_registry = tool_registry
 
     # --- Planification -------------------------------------------------
 
@@ -65,12 +70,36 @@ class Commander:
         mode = initial_mode(challenge.difficulty, len(usable))
         count = initial_agent_count(mode, len(usable))
 
+        # Challenge enrichi de sa catégorie déduite (pour playbook/outils).
+        enriched = challenge.model_copy(update={"category": category})
+
+        # Playbook sélectionné (si un registre est fourni).
+        playbook_id: str | None = None
+        if self.playbook_registry is not None:
+            selected = self.playbook_registry.select(enriched)
+            if selected is not None:
+                playbook_id = selected.id
+
+        # Outils autorisés de la catégorie (si un registre d'outils est fourni).
+        allowed_tools: list[str] = []
+        if self.tool_registry is not None:
+            try:
+                from ..tools.manifest import ToolCategory
+
+                allowed_tools = [
+                    t.id for t in self.tool_registry.by_category(ToolCategory(category.value))
+                ]
+            except ValueError:
+                allowed_tools = []  # catégorie sans équivalent outil (ex. unknown)
+
         missions = [
             Mission(
                 challenge_id=challenge.id,
                 agent_provider=usable[i],
                 specialist_profile=category.value,
                 objective=f"Résoudre le challenge {challenge.title}",
+                playbook_id=playbook_id,
+                allowed_tools=allowed_tools,
                 autonomy_policy=self.default_autonomy,
                 tool_access_policy=self.default_tools,
             )

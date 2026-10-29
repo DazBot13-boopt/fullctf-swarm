@@ -14,6 +14,20 @@ from ..models.flag import FlagCandidate, FlagStatus, can_flag_transition
 # Format de flag par défaut : FLAG{...} / CTF{...} / nom{...}. Configurable.
 DEFAULT_FLAG_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,15}\{[^\n}]{1,200}\}$")
 
+# Version non ancrée, pour EXTRAIRE des flags au milieu d'un texte (sortie d'agent).
+_FLAG_FINDALL = re.compile(r"[A-Za-z0-9_]{2,15}\{[^\n}]{1,200}\}")
+
+
+def extract_flags(text: str) -> list[str]:
+    """Extrait les flags candidats d'un texte libre (sortie d'agent/outil).
+
+    Retourne les occurrences uniques, dans l'ordre d'apparition.
+    """
+    seen: dict[str, None] = {}
+    for match in _FLAG_FINDALL.findall(text or ""):
+        seen.setdefault(match, None)
+    return list(seen.keys())
+
 
 class FlagVerifier:
     """Vérifie et fait progresser un flag candidat, états contrôlés."""
