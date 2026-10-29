@@ -6,12 +6,14 @@ from .allocation import (
     initial_mode,
     next_mode,
 )
+from .brain import CommanderBrain
 from .classifier import infer_category
 from .commander import Commander, MissionPlan
 from .stagnation import StagnationDetector
 
 __all__ = [
     "Commander",
+    "CommanderBrain",
     "MissionPlan",
     "StagnationDetector",
     "SwarmMode",

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..agents.registry import AgentRegistry
-from ..models.challenge import Challenge
+from ..models.challenge import Category, Challenge
 from ..models.mission import (
     Mission,
     MissionStatus,
@@ -50,6 +50,7 @@ class Commander:
         default_tools: ToolAccessPolicy | None = None,
         playbook_registry=None,
         tool_registry=None,
+        brain=None,
     ) -> None:
         self.registry = registry
         self.default_autonomy = default_autonomy or AutonomyPolicy()
@@ -57,6 +58,8 @@ class Commander:
         # Optionnels : s'ils sont fournis, plan() branche playbook + outils.
         self.playbook_registry = playbook_registry
         self.tool_registry = tool_registry
+        # Optionnel : cerveau LLM pour la classification floue (le code reste maître).
+        self.brain = brain
 
     # --- Planification -------------------------------------------------
 
@@ -67,6 +70,10 @@ class Commander:
             raise RuntimeError("Aucun agent utilisable : impossible de planifier")
 
         category = infer_category(challenge)
+        # Cerveau LLM en renfort UNIQUEMENT si les règles n'ont rien de net.
+        if self.brain is not None and category in (Category.MISC, Category.UNKNOWN):
+            category = self.brain.classify(challenge, fallback=category)
+
         mode = initial_mode(challenge.difficulty, len(usable))
         count = initial_agent_count(mode, len(usable))
 
