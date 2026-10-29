@@ -1,52 +1,88 @@
-# Image "fat" FullCTF Swarm : arsenal CTF pré-équipé.
-# Construit UNE fois, réutilisé instantanément par chaque mission.
+# Image "fat" FullCTF Swarm : TOUT l'arsenal CTF en un seul build.
 #
-# Build :   docker build -f infrastructure/Dockerfile.arsenal -t fullctf-arsenal:latest .
-# Usage :   les conteneurs jetables partent de cette image (voir DockerToolRunner).
+# Build :
+#   docker build -f infrastructure/Dockerfile.arsenal -t fullctf-arsenal:latest .
 #
-# Note : image volumineuse (reverse/forensic/crypto). Première build longue, normal.
+# ⚠️ Image VOLUMINEUSE (plusieurs Go) et build LONG (Ghidra + SageMath + angr...).
+#    C'est normal : on installe tout d'un coup pour que les missions démarrent
+#    instantanément ensuite. Prévoir du disque (>15 Go) et du temps (20-40 min).
+#
+# Astuce VPS : lance le build dans tmux pour ne pas perdre la session.
 
 FROM kalilinux/kali-rolling:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-c"]
 
-# --- Base système ---
+# --- Base système + toolchains ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv pipx \
-    git curl wget build-essential \
-    binutils file unzip \
+    python3 python3-pip python3-venv python3-dev pipx \
+    git curl wget ca-certificates unzip p7zip-full \
+    build-essential gcc-multilib \
+    ruby ruby-dev \
+    default-jdk \
+    file xxd \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Outils via apt (quand dispo dans les dépôts Kali) ---
+# --- Arsenal via apt (dépôts Kali) : web, pwn, reverse, forensic, crypto, misc ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gdb \
-    ffuf \
-    sqlmap \
-    binwalk \
-    exiftool \
-    tshark \
-    foremost \
+    # Web
+    ffuf sqlmap feroxbuster nikto whatweb wfuzz \
+    # Pwn / Reverse
+    gdb radare2 ltrace strace patchelf \
+    # Reverse lourd
+    ghidra \
+    # Crypto (SageMath est volumineux mais inclus comme demandé)
+    sagemath \
+    # Forensic
+    binwalk foremost exiftool steghide outguess \
+    sleuthkit testdisk \
+    # Mémoire / réseau
+    tshark tcpdump nmap \
+    # Cracking
+    john hashcat hydra \
+    # Stégano / divers
+    stegsnow \
     && rm -rf /var/lib/apt/lists/* || true
 
-# --- Outils Python (pwn, reverse, crypto) ---
-# --break-system-packages : image dédiée, pas de conflit avec un hôte.
+# --- Arsenal Python (image dédiée => --break-system-packages sans risque) ---
 RUN pip3 install --no-cache-dir --break-system-packages \
     pwntools \
     angr \
     z3-solver \
     ROPGadget \
+    ropper \
+    one_gadget \
+    pycryptodome \
+    sympy \
+    gmpy2 \
+    requests \
     volatility3 \
+    capstone unicorn keystone-engine \
+    pwndbg \
     || true
 
-# --- Workspace de travail monté par le runner ---
-WORKDIR /work
+# --- Outils Ruby (stégano PNG) ---
+RUN gem install --no-document zsteg || true
 
-# Par défaut : un shell. Le runner passe la commande réelle de l'outil.
+# --- pwndbg : init pour GDB ---
+RUN python3 -m pwndbg 2>/dev/null; \
+    echo "source $(python3 -c 'import pwndbg,os;print(os.path.dirname(pwndbg.__file__))')/gdbinit.py" \
+    > /root/.gdbinit 2>/dev/null || true
+
+# --- RsaCtfTool (depuis git, pas de paquet stable) ---
+RUN git clone --depth 1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/RsaCtfTool \
+    && pip3 install --no-cache-dir --break-system-packages -r /opt/RsaCtfTool/requirements.txt \
+    && ln -sf /opt/RsaCtfTool/RsaCtfTool.py /usr/local/bin/RsaCtfTool \
+    || true
+
+# --- PATH Ghidra headless (le paquet Kali installe ghidra dans /usr/share) ---
+ENV PATH="/usr/share/ghidra/support:${PATH}"
+
+WORKDIR /work
 CMD ["/bin/bash"]
 
-# Outils lourds à ajouter progressivement (builds séparés recommandés) :
-#   - Ghidra (headless)  : télécharger la release, PATH vers analyzeHeadless
-#   - SageMath           : paquet volumineux, image dédiée crypto conseillée
-#   - RsaCtfTool, zsteg  : pip / gem install selon besoin
-# On installe au fur et à mesure pour garder des builds gérables.
+# Vérification rapide après build (optionnel) :
+#   docker run --rm fullctf-arsenal:latest bash -lc \
+#     "python3 -c 'import pwn,angr,z3' && ffuf -V && gdb --version | head -1"
