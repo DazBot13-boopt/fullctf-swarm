@@ -8,6 +8,11 @@
 #    instantanément ensuite. Prévoir du disque (>15 Go) et du temps (20-40 min).
 #
 # Astuce VPS : lance le build dans tmux pour ne pas perdre la session.
+#
+# Robustesse (Sprint 0) : chaque catégorie s'installe PAQUET PAR PAQUET. Un paquet
+# indisponible dans les dépôts (ex. sagemath absent ce jour-là) est SAUTÉ et
+# n'annule plus toute la catégorie. Les skips sont visibles dans le log ("SKIP ...").
+# Prérequis hôte : net.ipv4.ip_forward=1 (sinon les conteneurs n'ont pas de réseau).
 
 FROM kalilinux/kali-rolling:latest
 
@@ -15,7 +20,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 SHELL ["/bin/bash", "-c"]
 
-# --- Base système + toolchains ---
+# --- Base système + toolchains (étape critique : PAS de || true, elle doit réussir) ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv python3-dev pipx \
     git curl wget ca-certificates unzip p7zip-full \
@@ -25,66 +30,69 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     file xxd \
     && rm -rf /var/lib/apt/lists/*
 
-# --- Arsenal via apt (dépôts Kali) : web, pwn, reverse, forensic, crypto, misc ---
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Web
-    ffuf sqlmap feroxbuster nikto whatweb wfuzz \
-    # Pwn / Reverse
-    gdb radare2 ltrace strace patchelf \
-    # Reverse lourd
-    ghidra \
-    # Crypto (SageMath est volumineux mais inclus comme demandé)
-    sagemath \
-    # Forensic
-    binwalk foremost exiftool steghide outguess \
-    sleuthkit testdisk \
-    # Mémoire / réseau
-    tshark tcpdump nmap \
-    # Cracking
-    john hashcat hydra \
-    # Stégano / divers
-    stegsnow \
-    && rm -rf /var/lib/apt/lists/* || true
+# --- Arsenal via apt (dépôts Kali) : web, pwn, reverse, forensic, réseau, cracking.
+#     Installé paquet par paquet => un paquet manquant ne casse pas les autres. ---
+RUN apt-get update && for p in \
+      ffuf sqlmap feroxbuster nikto whatweb wfuzz \
+      gdb gdb-multiarch radare2 ltrace strace patchelf pwndbg \
+      ghidra \
+      binwalk foremost exiftool steghide outguess \
+      sleuthkit testdisk \
+      tshark tcpdump nmap \
+      john hashcat hydra \
+      stegsnow ; do \
+        apt-get install -y --no-install-recommends "$p" || echo "SKIP apt: $p" ; \
+      done ; \
+    rm -rf /var/lib/apt/lists/*
 
-# --- Arsenal Python (image dédiée => --break-system-packages sans risque) ---
-RUN pip3 install --no-cache-dir --break-system-packages \
-    pwntools \
-    angr \
-    z3-solver \
-    ROPGadget \
-    ropper \
-    one_gadget \
-    pycryptodome \
-    sympy \
-    gmpy2 \
-    fpylll \
-    requests \
-    volatility3 \
-    capstone unicorn keystone-engine \
-    qiling \
-    scapy \
-    mitmproxy \
-    pwndbg \
-    || true
+# --- SageMath : volumineux et parfois absent des dépôts. Étape isolée et tolérante
+#     pour ne jamais bloquer le reste de l'arsenal crypto (z3/sympy/pycryptodome). ---
+RUN apt-get update \
+    && (apt-get install -y --no-install-recommends sagemath \
+        || echo "SKIP sagemath (indisponible via apt ce jour-là)") ; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- Arsenal Python (image dédiée => --break-system-packages sans risque).
+#     Install paquet par paquet : résilient aux indisponibilités PyPI. ---
+RUN for p in \
+      pwntools \
+      angr \
+      z3-solver \
+      ROPGadget \
+      ropper \
+      pycryptodome \
+      sympy \
+      gmpy2 \
+      fpylll \
+      requests \
+      volatility3 \
+      capstone unicorn keystone-engine \
+      qiling \
+      scapy \
+      mitmproxy ; do \
+        pip3 install --no-cache-dir --break-system-packages "$p" || echo "SKIP pip: $p" ; \
+      done
 
 # --- Playwright (web dynamique / XSS / JS) + navigateur Chromium ---
 RUN pip3 install --no-cache-dir --break-system-packages playwright \
     && python3 -m playwright install --with-deps chromium \
-    || true
+    || echo "SKIP playwright"
 
-# --- Outils Ruby (stégano PNG) ---
-RUN gem install --no-document zsteg || true
+# --- Outils Ruby : zsteg (stégano PNG) + one_gadget (pwn, gem plus fiable que pip) ---
+RUN for g in zsteg one_gadget ; do \
+      gem install --no-document "$g" || echo "SKIP gem: $g" ; \
+    done
 
-# --- pwndbg : init pour GDB ---
-RUN python3 -m pwndbg 2>/dev/null; \
-    echo "source $(python3 -c 'import pwndbg,os;print(os.path.dirname(pwndbg.__file__))')/gdbinit.py" \
-    > /root/.gdbinit 2>/dev/null || true
+# --- pwndbg : init pour GDB (tolérant si pwndbg absent) ---
+RUN PD=$(python3 -c 'import pwndbg,os;print(os.path.dirname(pwndbg.__file__))' 2>/dev/null) \
+    && [ -n "$PD" ] && echo "source $PD/gdbinit.py" > /root/.gdbinit \
+    || echo "SKIP pwndbg gdbinit"
 
 # --- RsaCtfTool (depuis git, pas de paquet stable) ---
 RUN git clone --depth 1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/RsaCtfTool \
     && pip3 install --no-cache-dir --break-system-packages -r /opt/RsaCtfTool/requirements.txt \
     && ln -sf /opt/RsaCtfTool/RsaCtfTool.py /usr/local/bin/RsaCtfTool \
-    || true
+    || echo "SKIP RsaCtfTool"
 
 # --- PATH Ghidra headless (le paquet Kali installe ghidra dans /usr/share) ---
 ENV PATH="/usr/share/ghidra/support:${PATH}"
