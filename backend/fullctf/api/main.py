@@ -6,15 +6,18 @@ La persistance (PostgreSQL) et les agents viendront dans les sprints suivants.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pathlib import Path
 from pydantic import BaseModel
 
 from ..evidence.store import EvidenceStore
 from ..memory.store import MemoryStore
 from ..models.challenge import Category, Challenge, Difficulty
 from ..models.mission import Mission
+from ..persistence import ChallengeRepository, MissionRepository, SqliteDocStore
 from ..supervisor.service import SupervisorService, SupervisorSnapshot
 
 app = FastAPI(
@@ -23,9 +26,15 @@ app = FastAPI(
     description="API de la plateforme de résolution de challenges CTF autorisés.",
 )
 
-# Stockage en mémoire (temporaire, remplacé par une base plus tard).
-_CHALLENGES: dict[str, Challenge] = {}
-_MISSIONS: dict[str, Mission] = {}
+# Persistance : fichier SQLite par défaut (FULLCTF_DB_PATH pour le configurer,
+# ":memory:" pour un store éphémère, ex. en tests).
+_DB_PATH = os.environ.get("FULLCTF_DB_PATH", "data/fullctf.db")
+if _DB_PATH != ":memory:":
+    Path(_DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+_STORE = SqliteDocStore(_DB_PATH)
+
+_CHALLENGE_REPO = ChallengeRepository(_STORE)
+_MISSION_REPO = MissionRepository(_STORE)
 _EVIDENCE = EvidenceStore()
 _MEMORY = MemoryStore()
 _SUPERVISOR = SupervisorService(_EVIDENCE)
@@ -51,22 +60,22 @@ def health() -> dict[str, str]:
 
 @app.post("/challenges", response_model=Challenge, status_code=201)
 def create_challenge(payload: ChallengeCreate) -> Challenge:
-    """Importe un challenge dans le système."""
+    """Importe un challenge dans le système (persisté)."""
     challenge = Challenge(**payload.model_dump())
-    _CHALLENGES[challenge.id] = challenge
+    _CHALLENGE_REPO.save(challenge)
     return challenge
 
 
 @app.get("/challenges", response_model=list[Challenge])
 def list_challenges() -> list[Challenge]:
     """Liste tous les challenges importés."""
-    return list(_CHALLENGES.values())
+    return _CHALLENGE_REPO.list()
 
 
 @app.get("/challenges/{challenge_id}", response_model=Challenge)
 def get_challenge(challenge_id: str) -> Challenge:
     """Récupère un challenge par son identifiant."""
-    challenge = _CHALLENGES.get(challenge_id)
+    challenge = _CHALLENGE_REPO.get(challenge_id)
     if challenge is None:
         raise HTTPException(status_code=404, detail="Challenge introuvable")
     return challenge
@@ -75,13 +84,13 @@ def get_challenge(challenge_id: str) -> Challenge:
 @app.get("/missions", response_model=list[Mission])
 def list_missions() -> list[Mission]:
     """Liste les missions enregistrées."""
-    return list(_MISSIONS.values())
+    return _MISSION_REPO.list()
 
 
 @app.get("/supervisor/snapshot", response_model=SupervisorSnapshot)
 def supervisor_snapshot() -> SupervisorSnapshot:
     """Vue d'ensemble fiable de l'état (noyau code, lecture seule)."""
-    return _SUPERVISOR.snapshot(list(_MISSIONS.values()))
+    return _SUPERVISOR.snapshot(_MISSION_REPO.list())
 
 
 class MemorySearchResult(BaseModel):

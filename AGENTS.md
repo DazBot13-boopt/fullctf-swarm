@@ -5,7 +5,7 @@ Ce fichier dit comment travailler sur ce dépôt et où en est le projet.
 
 ## État actuel du projet
 
-Backend **Sprints 1–12 codés et testés** : **124 tests passent** (`pytest`).
+Backend **Sprints 1–12 + persistance codés et testés** : **134 tests passent** (`pytest`).
 Tout est développé avec des **mocks** pour les parties externes (agents, réseau).
 Il reste le **Sprint 0** (à faire ICI, sur le VPS) : audit réel + branchement des
 vrais CLI. Voir `SPRINT_0.md` et `scripts/sprint0_audit.sh`.
@@ -33,6 +33,7 @@ vrais CLI. Voir `SPRINT_0.md` et `scripts/sprint0_audit.sh`.
 | Attack/Defense bot | `attackdefense/` | ✅ |
 | Benchmarks | `benchmarks/` | ✅ |
 | **Mission Runner (intégration bout-en-bout)** | `runner/` | ✅ |
+| **Persistance (SQLite, PostgreSQL-ready)** | `persistence/` | ✅ |
 
 ### Ce qui reste (à finir ici)
 - **Sprint 0** : lancer `scripts/sprint0_audit.sh`, installer les CLI manquants,
@@ -40,7 +41,10 @@ vrais CLI. Voir `SPRINT_0.md` et `scripts/sprint0_audit.sh`.
   dans `backend/fullctf/agents/providers.py`.
 - Remplacer les mocks par les vrais adaptateurs dans un point d'entrée d'exécution.
 - Brancher le `ModelCatalog` avec les noms de modèles réels (interroger les comptes).
-- Persistance (PostgreSQL) : aujourd'hui tout est en mémoire.
+- Persistance : SQLite en place (`FULLCTF_DB_PATH`). Pour PostgreSQL, implémenter
+  un `DocStore` Postgres derrière la même interface (repositories inchangés).
+- Brancher Evidence/Memory sur les repositories persistés (aujourd'hui l'API les
+  garde encore en mémoire pour ces deux-là).
 - CAO : auditer et décider s'il devient une dépendance (sinon garder notre impl).
 
 ## Décisions d'architecture (ne pas casser)
