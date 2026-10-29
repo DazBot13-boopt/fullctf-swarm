@@ -1,0 +1,52 @@
+# Image "fat" FullCTF Swarm : arsenal CTF pré-équipé.
+# Construit UNE fois, réutilisé instantanément par chaque mission.
+#
+# Build :   docker build -f infrastructure/Dockerfile.arsenal -t fullctf-arsenal:latest .
+# Usage :   les conteneurs jetables partent de cette image (voir DockerToolRunner).
+#
+# Note : image volumineuse (reverse/forensic/crypto). Première build longue, normal.
+
+FROM kalilinux/kali-rolling:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-c"]
+
+# --- Base système ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-venv pipx \
+    git curl wget build-essential \
+    binutils file unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Outils via apt (quand dispo dans les dépôts Kali) ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gdb \
+    ffuf \
+    sqlmap \
+    binwalk \
+    exiftool \
+    tshark \
+    foremost \
+    && rm -rf /var/lib/apt/lists/* || true
+
+# --- Outils Python (pwn, reverse, crypto) ---
+# --break-system-packages : image dédiée, pas de conflit avec un hôte.
+RUN pip3 install --no-cache-dir --break-system-packages \
+    pwntools \
+    angr \
+    z3-solver \
+    ROPGadget \
+    volatility3 \
+    || true
+
+# --- Workspace de travail monté par le runner ---
+WORKDIR /work
+
+# Par défaut : un shell. Le runner passe la commande réelle de l'outil.
+CMD ["/bin/bash"]
+
+# Outils lourds à ajouter progressivement (builds séparés recommandés) :
+#   - Ghidra (headless)  : télécharger la release, PATH vers analyzeHeadless
+#   - SageMath           : paquet volumineux, image dédiée crypto conseillée
+#   - RsaCtfTool, zsteg  : pip / gem install selon besoin
+# On installe au fur et à mesure pour garder des builds gérables.
