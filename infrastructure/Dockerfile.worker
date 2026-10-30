@@ -1,0 +1,44 @@
+# Image "worker" FullCTF : arsenal complet + les 3 CLI agents.
+#
+# = fullctf-arsenal (tous les outils CTF) + Node + Codex + Claude Code + Cursor Agent.
+# C'est l'image dans laquelle un worker tourne, ISOLÉ (conteneur jetable), conforme
+# à la spec : « liberté totale DANS le conteneur ; l'hôte n'est jamais modifié ».
+#
+# Build (après fullctf-arsenal:latest) :
+#   docker build -f infrastructure/Dockerfile.worker -t fullctf-worker:latest .
+#   (ou : bash scripts/build_worker.sh  -> build durable en tmux)
+#
+# ⚠️ L'AUTH N'EST JAMAIS DANS L'IMAGE (secrets hors image/dépôt). Elle est montée
+#    au lancement, en LIVE depuis l'hôte, pour que le compte actif du serveur soit
+#    celui utilisé (logout/login d'un compte sur l'hôte => le worker suit). Ex. :
+#      docker run --rm --cap-add=NET_RAW --cap-add=NET_ADMIN \
+#        -v $HOME/.codex/auth.json:/root/.codex/auth.json \
+#        -v $HOME/.claude/.credentials.json:/root/.claude/.credentials.json \
+#        -v $HOME/.config/cursor-agent/auth.json:/root/.config/cursor-agent/auth.json \
+#        -v /chemin/chall:/work:ro \
+#        fullctf-worker:latest codex exec --skip-git-repo-check ...
+
+FROM fullctf-arsenal:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# --- Node.js 22 (requis par Codex CLI et Claude Code CLI) ---
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && node --version && npm --version
+
+# --- Codex CLI + Claude Code CLI (npm global, versions épinglées = celles de l'hôte) ---
+RUN npm install -g @openai/codex@0.164.0 @anthropic-ai/claude-code@2.1.314 \
+    && codex --version && claude --version
+
+# --- Cursor Agent CLI (installeur officiel ; installe dans /root/.local/bin) ---
+RUN curl https://cursor.com/install -fsS | bash || echo "SKIP cursor install"
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Vérif (cursor-agent peut échouer si l'installeur change ; non bloquant au build)
+RUN cursor-agent --version || echo "WARN: cursor-agent indisponible"
+
+WORKDIR /work
+CMD ["/bin/bash"]
