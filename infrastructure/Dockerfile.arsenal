@@ -35,6 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && for p in \
       ffuf sqlmap feroxbuster nikto whatweb wfuzz \
       gdb gdb-multiarch radare2 ltrace strace patchelf pwndbg \
+      python3-pwntools \
+      python3-fpylll \
       ghidra \
       binwalk foremost exiftool steghide outguess \
       sleuthkit testdisk \
@@ -54,8 +56,8 @@ RUN apt-get update \
 
 # --- Arsenal Python (image dédiée => --break-system-packages sans risque).
 #     Install paquet par paquet : résilient aux indisponibilités PyPI. ---
+# Note : pwntools s'installe via apt (python3-pwntools, plus fiable que pip).
 RUN for p in \
-      pwntools \
       angr \
       z3-solver \
       ROPGadget \
@@ -63,7 +65,6 @@ RUN for p in \
       pycryptodome \
       sympy \
       gmpy2 \
-      fpylll \
       requests \
       volatility3 \
       capstone unicorn keystone-engine \
@@ -88,14 +89,18 @@ RUN PD=$(python3 -c 'import pwndbg,os;print(os.path.dirname(pwndbg.__file__))' 2
     && [ -n "$PD" ] && echo "source $PD/gdbinit.py" > /root/.gdbinit \
     || echo "SKIP pwndbg gdbinit"
 
-# --- RsaCtfTool (depuis git, pas de paquet stable) ---
+# --- RsaCtfTool (git ; désormais packagé pyproject/src -> install pip propre,
+#     fournit la commande `RsaCtfTool`) ---
 RUN git clone --depth 1 https://github.com/RsaCtfTool/RsaCtfTool.git /opt/RsaCtfTool \
-    && pip3 install --no-cache-dir --break-system-packages -r /opt/RsaCtfTool/requirements.txt \
-    && ln -sf /opt/RsaCtfTool/RsaCtfTool.py /usr/local/bin/RsaCtfTool \
+    && pip3 install --no-cache-dir --break-system-packages /opt/RsaCtfTool \
     || echo "SKIP RsaCtfTool"
 
-# --- PATH Ghidra headless (le paquet Kali installe ghidra dans /usr/share) ---
+# --- Ghidra headless : le binaire est dans /usr/share/ghidra/support. On met un
+#     symlink dans /usr/local/bin pour qu'`analyzeHeadless` soit TOUJOURS sur le
+#     PATH (un shell de login recharge le PATH et perdrait un simple ENV). ---
 ENV PATH="/usr/share/ghidra/support:${PATH}"
+RUN ln -sf /usr/share/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless \
+    2>/dev/null || echo "SKIP ghidra symlink"
 
 WORKDIR /work
 CMD ["/bin/bash"]
@@ -103,3 +108,9 @@ CMD ["/bin/bash"]
 # Vérification rapide après build (optionnel) :
 #   docker run --rm fullctf-arsenal:latest bash -lc \
 #     "python3 -c 'import pwn,angr,z3' && ffuf -V && gdb --version | head -1"
+#
+# Note runtime (pas un souci de build) : nmap et les outils à sockets bruts ont
+# des capabilities (cap_net_raw). Pour qu'ils fonctionnent, lancer le conteneur de
+# mission avec les droits réseau, p.ex. :
+#   docker run --cap-add=NET_RAW --cap-add=NET_ADMIN ... fullctf-arsenal:latest
+# (cohérent avec la policy "liberté totale DANS le conteneur jetable").
