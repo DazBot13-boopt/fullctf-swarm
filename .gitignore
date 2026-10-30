@@ -15,3 +15,7 @@ logs/
 *.egg-info/
 dist/
 build/
+
+# Artefacts de build Docker (générés, pas du code source)
+infrastructure/*_build.log
+infrastructure/*_build.done

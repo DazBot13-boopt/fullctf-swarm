@@ -43,3 +43,38 @@ Pour chaque CLI (codex, claude, cursor-agent) :
 - Pas de 4e agent. Pas de copie de code CAO/CAI sans licence vérifiée.
 - Pas de soumission automatique de flag sans autonomy_policy explicite.
 - Ne jamais prétendre qu'un test a réussi sans l'avoir exécuté.
+
+---
+
+## Résultats Sprint 0 (exécuté sur le VPS — 2026-10-29)
+
+### Phase A — Environnement (vérifié)
+- Python 3.12.3, Docker 29.1.3 (démon OK), uv 0.13.5, node 24, tmux 3.4 : OK.
+- Manquant : plugin `docker compose` v2 (non bloquant pour le build `docker build`).
+
+### Phase D — 3 CLI testés en non-interactif (tâche inoffensive, lecture seule)
+Commandes réelles constatées et branchées dans `agents/providers.py` :
+- **codex** : `codex exec --skip-git-repo-check [-m MODEL] (--dangerously-bypass-approvals-and-sandbox | -s read-only) PROMPT`
+- **claude** : `claude -p [--model MODEL] [--dangerously-skip-permissions] PROMPT`
+- **cursor** : `cursor-agent -p --output-format text [--model MODEL] [--force] PROMPT`
+
+Flag `auto` : True = plein accès (prévu pour tourner DANS le conteneur arsenal
+isolé), False = sandbox sûr (test sur l'hôte). Verrouillé par `tests/test_providers.py`.
+
+### Modèles réels (ModelCatalog)
+`build_sprint0_catalog()` rempli depuis `cursor-agent --list-models` et les alias
+Claude. Codex = défaut du compte (non deviné). Voir `tests/test_model_config.py`.
+
+### Correctif infra critique : réseau des conteneurs Docker
+Symptôme : le build de l'image arsenal échouait (`apt-get` ne trouvait aucun
+paquet) et tout accès réseau depuis un conteneur restait bloqué.
+Cause : `net.ipv4.ip_forward = 0` sur l'hôte → pas de NAT/forwarding pour le
+bridge Docker. Correctif appliqué et **persisté** :
+```
+/etc/sysctl.d/99-fullctf-docker.conf : net.ipv4.ip_forward=1
+```
+Après correctif : DNS + TCP OK depuis le conteneur, build arsenal relancé.
+
+### Reste à faire
+- Vérifier l'image `fullctf-arsenal:latest` après build (pwn/angr/z3/ffuf/gdb/ghidra).
+- Script d'exemple : vraie mission bout-en-bout via `MissionRunner` + vrai adaptateur.

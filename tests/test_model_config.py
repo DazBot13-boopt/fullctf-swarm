@@ -39,3 +39,18 @@ def test_tier_for_difficulty():
     assert tier_for_difficulty(Difficulty.EASY) == ModelTier.FAST
     assert tier_for_difficulty(Difficulty.INSANE) == ModelTier.HEAVY
     assert tier_for_difficulty(Difficulty.UNKNOWN) == ModelTier.AUTO
+
+
+# --- Sprint 0 : catalogue rempli avec les modèles réels du VPS ---
+from fullctf.agents.model_config import build_sprint0_catalog  # noqa: E402
+
+
+def test_sprint0_catalog_has_three_providers_with_real_models():
+    cat = build_sprint0_catalog()
+    assert cat.select(AgentProvider.CLAUDE, ModelTier.FAST) == "haiku"
+    assert cat.select(AgentProvider.CLAUDE, ModelTier.HEAVY) == "opus"
+    assert cat.select(AgentProvider.CURSOR, ModelTier.HEAVY) == "claude-opus-5-thinking-high"
+    # Cursor en FAST a un modèle réel (issu de --list-models)
+    assert cat.select(AgentProvider.CURSOR, ModelTier.FAST) == "gpt-5.3-codex-low"
+    # Codex : défaut du compte -> None (non deviné), repli propre
+    assert cat.select(AgentProvider.CODEX, ModelTier.HEAVY) is None

@@ -57,6 +57,46 @@ class ModelCatalog:
         return config.pick(tier)
 
 
+def build_sprint0_catalog() -> ModelCatalog:
+    """Catalogue rempli avec les modèles RÉELS constatés au Sprint 0 (VPS).
+
+    Sources (interrogation des comptes) :
+    - Cursor  : `cursor-agent --list-models` (opus-5, gpt-5.x-codex, grok, gemini…).
+                `None` => mode `auto` du CLI (Cursor choisit).
+    - Claude  : alias officiels du CLI (`--model haiku|sonnet|opus`), repli compte.
+    - Codex   : modèle par défaut du compte (`None`) ; `-m` accepte un nom précis
+                si besoin. Les noms exacts dépendent du compte, non devinés ici.
+
+    Ces valeurs sont des points de départ ajustables, pas des constantes figées.
+    """
+    catalog = ModelCatalog()
+    catalog.set(
+        ProviderModels(
+            provider=AgentProvider.CODEX,
+            default_model=None,  # défaut du compte Codex
+            fast_model=None,
+            heavy_model=None,
+        )
+    )
+    catalog.set(
+        ProviderModels(
+            provider=AgentProvider.CLAUDE,
+            default_model=None,  # défaut du compte Claude
+            fast_model="haiku",
+            heavy_model="opus",
+        )
+    )
+    catalog.set(
+        ProviderModels(
+            provider=AgentProvider.CURSOR,
+            default_model=None,  # None => "auto" du CLI Cursor
+            fast_model="gpt-5.3-codex-low",
+            heavy_model="claude-opus-5-thinking-high",
+        )
+    )
+    return catalog
+
+
 def tier_for_difficulty(difficulty: Difficulty) -> ModelTier:
     """Associe une difficulté à un tier de modèle."""
     if difficulty in (Difficulty.EASY, Difficulty.MEDIUM):
