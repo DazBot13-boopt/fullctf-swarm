@@ -31,7 +31,7 @@ esac
 AUTH=()
 [ -f "$HOME/.codex/auth.json" ]              && AUTH+=( -v "$HOME/.codex/auth.json:/root/.codex/auth.json:ro" )
 [ -f "$HOME/.claude/.credentials.json" ]     && AUTH+=( -v "$HOME/.claude/.credentials.json:/root/.claude/.credentials.json:ro" )
-[ -f "$HOME/.config/cursor-agent/auth.json" ] && AUTH+=( -v "$HOME/.config/cursor-agent/auth.json:/root/.config/cursor-agent/auth.json:ro" )
+[ -f "$HOME/.config/cursor/auth.json" ]      && AUTH+=( -v "$HOME/.config/cursor/auth.json:/root/.config/cursor/auth.json:ro" )
 
 # Cursor s'authentifie via CURSOR_API_KEY (son token n'est pas dans un fichier
 # montable : keyring/store lié à la machine). On passe la clé si elle est dans
