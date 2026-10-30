@@ -36,8 +36,16 @@ RUN npm install -g @openai/codex@0.164.0 @anthropic-ai/claude-code@2.1.314 \
 # --- Cursor Agent CLI (installeur officiel ; installe dans /root/.local/bin) ---
 RUN curl https://cursor.com/install -fsS | bash || echo "SKIP cursor install"
 ENV PATH="/root/.local/bin:${PATH}"
+# symlink pour que cursor-agent soit sur le PATH même dans un shell login
+RUN ln -sf /root/.local/share/cursor-agent/versions/*/cursor-agent /usr/local/bin/cursor-agent 2>/dev/null \
+    || ln -sf /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent 2>/dev/null \
+    || echo "SKIP cursor symlink"
 
-# Vérif (cursor-agent peut échouer si l'installeur change ; non bloquant au build)
+# TMPDIR writable sur le même device => évite le warning codex "Cross-device link"
+# qui polluerait la sortie du worker.
+ENV TMPDIR=/tmp
+
+# Vérif (non bloquant au build)
 RUN cursor-agent --version || echo "WARN: cursor-agent indisponible"
 
 WORKDIR /work
