@@ -20,8 +20,13 @@ PROMPT_FILE="${3:?fichier prompt requis}"
 [ -f "$PROMPT_FILE" ] || { echo "ERREUR: $PROMPT_FILE introuvable"; exit 1; }
 PROMPT="$(cat "$PROMPT_FILE")"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AGENTS_MD="$SCRIPT_DIR/../infrastructure/ctf_agents.md"   # cadrage CTF (lu par codex/cursor)
+# Codex : le modèle "sol" refuse l'offensif ; "terra" l'accepte -> défaut terra.
+CODEX_MODEL="${CODEX_MODEL:-gpt-5.6-terra}"
+
 case "$AGENT" in
-  codex)  CMD=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox "$PROMPT") ;;
+  codex)  CMD=(codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox -m "$CODEX_MODEL" "$PROMPT") ;;
   claude) CMD=(claude -p --dangerously-skip-permissions "$PROMPT") ;;
   cursor) CMD=(cursor-agent -p --output-format text --force "$PROMPT") ;;
   *) echo "agent inconnu: $AGENT (codex|claude|cursor)"; exit 1 ;;
@@ -45,5 +50,6 @@ exec docker run --rm \
   "${CURSOR_ENV[@]}" \
   "${AUTH[@]}" \
   -v "$(realpath "$CHALL")/files:/work/files:ro" \
+  $( [ -f "$AGENTS_MD" ] && echo -v "$(realpath "$AGENTS_MD")":/work/AGENTS.md:ro ) \
   fullctf-worker:latest \
   "${CMD[@]}"
