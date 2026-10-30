@@ -33,9 +33,16 @@ AUTH=()
 [ -f "$HOME/.claude/.credentials.json" ]     && AUTH+=( -v "$HOME/.claude/.credentials.json:/root/.claude/.credentials.json:ro" )
 [ -f "$HOME/.config/cursor-agent/auth.json" ] && AUTH+=( -v "$HOME/.config/cursor-agent/auth.json:/root/.config/cursor-agent/auth.json:ro" )
 
+# Cursor s'authentifie via CURSOR_API_KEY (son token n'est pas dans un fichier
+# montable : keyring/store lié à la machine). On passe la clé si elle est dans
+# l'env de l'hôte. Génère-la dans Cursor puis : export CURSOR_API_KEY=...
+CURSOR_ENV=()
+[ -n "${CURSOR_API_KEY:-}" ] && CURSOR_ENV=( -e "CURSOR_API_KEY=${CURSOR_API_KEY}" )
+
 exec docker run --rm \
   --cap-add=NET_RAW --cap-add=NET_ADMIN \
   -e IS_SANDBOX=1 \
+  "${CURSOR_ENV[@]}" \
   "${AUTH[@]}" \
   -v "$(realpath "$CHALL")/files:/work/files:ro" \
   fullctf-worker:latest \
