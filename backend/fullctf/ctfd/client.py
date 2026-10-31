@@ -39,6 +39,10 @@ class CTFdChallenge(BaseModel):
     category: str
     value: int
     solved: bool = False
+    # Détails (remplis par get_challenge) :
+    description: str = ""
+    connection_info: str | None = None  # cible live (host:port / URL) si fournie
+    files: list[str] = []  # chemins/URLs des pièces jointes
 
 
 class SubmissionResult(BaseModel):
@@ -89,6 +93,9 @@ class CTFdClient:
         return CTFdChallenge(
             id=c["id"], name=c.get("name", ""), category=c.get("category", ""),
             value=c.get("value", 0), solved=c.get("solved_by_me", False),
+            description=c.get("description", "") or "",
+            connection_info=c.get("connection_info"),
+            files=list(c.get("files", []) or []),
         )
 
     def submit_flag(self, challenge_id: int, flag: str) -> SubmissionResult:
