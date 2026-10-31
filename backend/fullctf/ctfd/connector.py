@@ -16,13 +16,17 @@ ni Docker.
 
 from __future__ import annotations
 
+import queue
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..agents.container_adapter import ExecRun
+from ..agents.container_adapter import ContainerAgentAdapter, ExecRun
+from ..agents.registry import AgentRegistry
 from ..models.challenge import Category, Challenge, Difficulty
+from ..models.mission import AgentProvider
 from ..models.policies import AutonomyPolicy, ExecutionMode
-from ..runner.real_mission import SolveResult, solve_challenge
+from ..runner.real_mission import DEFAULT_PROVIDER_ORDER, SolveResult, solve_challenge
 from .client import CTFdChallenge, CTFdClient, HttpClient, SubmissionResult
 from .http import HttpxClient
 
@@ -194,6 +198,123 @@ def solve_ctf(
                          submitted_accepted=accepted, results=results)
 
 
+def _usable_providers(exec_run: ExecRun | None) -> list[AgentProvider]:
+    """Agents réellement authentifiés sur l'hôte (ordre d'escalade par défaut)."""
+    reg = AgentRegistry()
+    for prov in DEFAULT_PROVIDER_ORDER:
+        reg.register(ContainerAgentAdapter(prov, challenge_files_dir=".", exec_run=exec_run))
+    return reg.usable_providers()
+
+
+def solve_ctf_parallel(
+    connector: CTFdConnector,
+    *,
+    data_root: str | Path,
+    difficulty: Difficulty = Difficulty.UNKNOWN,
+    categories: list[str] | None = None,
+    limit: int | None = None,
+    auto_submit: bool = False,
+    image: str = "fullctf-worker:latest",
+    time_budget_seconds: int = 1800,
+    escalate_unsolved: bool = True,
+    exec_run: ExecRun | None = None,
+) -> CTFRunSummary:
+    """Résout les challenges EN PARALLÈLE : chaque agent prend un challenge différent.
+
+    - Phase « étalement » : N agents disponibles = N challenges traités en même temps
+      (1 agent par challenge, chacun pioche le suivant dès qu'il se libère).
+    - Phase « renfort » : les challenges que personne n'a résolus sont réessayés avec
+      l'escalade complète (tous les agents) — couvre aussi le cas d'un seul challenge.
+
+    Les appels HTTP (CTFd) sont sérialisés ; seule l'exécution des workers (Docker)
+    tourne en parallèle.
+    """
+    if not connector.authenticate():
+        raise RuntimeError("Authentification CTFd échouée (token/identifiants).")
+
+    providers = _usable_providers(exec_run)
+    if not providers:
+        raise RuntimeError("Aucun agent authentifié sur l'hôte.")
+
+    challenges = connector.list_unsolved(categories)
+    if limit is not None:
+        challenges = challenges[:limit]
+
+    http_lock = threading.Lock()
+    results: dict[int, CTFChallengeResult] = {}
+    results_lock = threading.Lock()
+
+    def process(listed: CTFdChallenge, provider_order: list[AgentProvider]) -> None:
+        with http_lock:
+            detailed = connector.fetch(listed.id) or listed
+            chall_root = Path(data_root) / f"ctfd-{listed.id}"
+            files_dir = connector.download_files(detailed, chall_root)
+        autonomy = AutonomyPolicy(
+            mode=ExecutionMode.CONNECTED if detailed.connection_info else ExecutionMode.LOCAL_ONLY,
+            auto_submit_flag=False, human_checkpoints=False,
+        )
+        solve = solve_challenge(
+            connector.to_challenge(detailed, difficulty),
+            files_dir=files_dir, data_root=chall_root / "work",
+            target=detailed.connection_info, description=detailed.description,
+            autonomy=autonomy, image=image, provider_order=provider_order,
+            time_budget_seconds=time_budget_seconds, exec_run=exec_run,
+        )
+        submission: SubmissionResult | None = None
+        if auto_submit and solve.solved and solve.flag_value:
+            with http_lock:
+                submission = connector.submit(listed.id, solve.flag_value)
+        with results_lock:
+            results[listed.id] = CTFChallengeResult(
+                ctfd_id=listed.id, name=listed.name, category=listed.category,
+                solve=solve, submission=submission,
+            )
+        mark = "🚩" if solve.solved else "·"
+        sub = f" submit={submission.status}" if submission else ""
+        print(f"  {mark} [{listed.category}] {listed.name} "
+              f"agent={solve.winning_agent.value if solve.winning_agent else '—'} "
+              f"flag={solve.flag_value or '—'}{sub}", flush=True)
+
+    # --- Phase étalement : un agent par challenge, en parallèle ---
+    q: queue.Queue[CTFdChallenge] = queue.Queue()
+    for c in challenges:
+        q.put(c)
+
+    def agent_worker(provider: AgentProvider) -> None:
+        while True:
+            try:
+                listed = q.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                process(listed, [provider])  # un seul agent sur ce challenge
+            finally:
+                q.task_done()
+
+    print(f"=== Étalement : {len(providers)} agents sur {len(challenges)} challenges ===",
+          flush=True)
+    threads = [threading.Thread(target=agent_worker, args=(p,), daemon=True) for p in providers]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # --- Phase renfort : escalade complète sur ce qui reste non résolu ---
+    if escalate_unsolved:
+        unsolved = [c for c in challenges if not results[c.id].solve.solved]
+        if unsolved:
+            print(f"=== Renfort : escalade complète sur {len(unsolved)} challenge(s) non résolu(s) ===",
+                  flush=True)
+            for listed in unsolved:
+                process(listed, list(providers))  # tous les agents (escalade)
+
+    ordered = [results[c.id] for c in challenges]
+    solved = sum(1 for r in ordered if r.solve.solved)
+    accepted = sum(1 for r in ordered if r.submission and r.submission.accepted)
+    return CTFRunSummary(total=len(ordered), solved=solved,
+                         submitted_accepted=accepted, results=ordered)
+
+
 # --------------------------------------------------------------------------- CLI
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     import argparse
@@ -208,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--difficulty", default="unknown", choices=[d.value for d in Difficulty])
     p.add_argument("--auto-submit", action="store_true")
+    p.add_argument("--parallel", action="store_true",
+                   help="Les agents traitent des challenges différents en parallèle.")
     p.add_argument("--no-verify-tls", action="store_true")
     p.add_argument("--data-root", default="/tmp/fullctf-ctfd")
     p.add_argument("--image", default="fullctf-worker:latest")
@@ -219,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
         verify_tls=not args.no_verify_tls,
     )
     cats = [c.strip() for c in args.categories.split(",")] if args.categories else None
-    summary = solve_ctf(
+    runner = solve_ctf_parallel if args.parallel else solve_ctf
+    summary = runner(
         connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
         categories=cats, limit=args.limit, auto_submit=args.auto_submit,
         image=args.image, time_budget_seconds=args.timeout,

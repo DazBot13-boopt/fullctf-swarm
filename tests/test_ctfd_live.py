@@ -119,3 +119,57 @@ def test_solve_ctf_no_autosubmit_proposes_only(fake_home, tmp_path):
     assert summary.submitted_accepted == 0
     assert http.submitted == []  # rien soumis sans auto_submit
     assert summary.results[0].submission is None
+
+
+class FakeHttpMulti:
+    """3 challenges non résolus, détails + submit OK (pour tester le parallèle)."""
+
+    def __init__(self):
+        self.submitted = []
+        self._lock_ok = True
+
+    def get(self, url, headers):
+        if url.endswith("/api/v1/challenges"):
+            return HttpResponse(status_code=200, json_body={"data": [
+                {"id": i, "name": f"C{i}", "category": "web", "value": 10 * i,
+                 "solved_by_me": False} for i in (1, 2, 3)
+            ]})
+        for i in (1, 2, 3):
+            if url.endswith(f"/api/v1/challenges/{i}"):
+                return HttpResponse(status_code=200, json_body={"data": {
+                    "id": i, "name": f"C{i}", "category": "web", "value": 10 * i,
+                    "solved_by_me": False, "description": "x",
+                    "connection_info": f"t:{i}", "files": [],
+                }})
+        return HttpResponse(status_code=404, json_body={})
+
+    def post(self, url, headers, json):
+        self.submitted.append(json)
+        return HttpResponse(status_code=200, json_body={"data": {"status": "correct"}})
+
+
+def test_solve_ctf_parallel(fake_home, tmp_path):
+    from fullctf.ctfd.connector import solve_ctf_parallel
+    http = FakeHttpMulti()
+    connector = CTFdConnector("https://ctf.example", token="tok", http=http)
+
+    def exec_run(argv, timeout):
+        # chaque challenge renvoie un flag distinct (dérivé de la cible t:N)
+        prompt = argv[-1]
+        n = "1"
+        for c in ("t:1", "t:2", "t:3"):
+            if c in prompt:
+                n = c[-1]
+        return (0, f"FLAG: CTF{{solved{n}0000000}}")
+
+    summary = solve_ctf_parallel(
+        connector, data_root=tmp_path / "data", difficulty=Difficulty.EASY,
+        auto_submit=True, exec_run=exec_run,
+    )
+    assert summary.total == 3
+    assert summary.solved == 3                 # les 3 résolus en parallèle
+    assert summary.submitted_accepted == 3      # les 3 soumis + acceptés
+    assert len(http.submitted) == 3
+    # chaque challenge a bien un agent gagnant parmi les agents dispo
+    agents = {r.solve.winning_agent for r in summary.results}
+    assert all(a is not None for a in agents)
