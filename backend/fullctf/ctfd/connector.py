@@ -340,6 +340,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
                    help="Les agents traitent des challenges différents en parallèle.")
     p.add_argument("--workstealing", action="store_true",
                    help="Agents jamais au repos + course (1er qui trouve gagne, autres annulés).")
+    p.add_argument("--debate", action="store_true",
+                   help="Un autre agent confirme/réfute le flag avant toute soumission.")
     p.add_argument("--ids", default=None, help="Cibler des challenges précis, ex: 21,18,22")
     p.add_argument("--no-verify-tls", action="store_true")
     p.add_argument("--data-root", default="/tmp/fullctf-ctfd")
@@ -359,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
         ws = solve_ctf_workstealing(
             connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
             categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
-            image=args.image, time_budget_seconds=args.timeout,
+            debate=args.debate, image=args.image, time_budget_seconds=args.timeout,
         )
         print(f"\n=== CTF (work-stealing) : {ws.solved}/{ws.total} résolus, "
               f"{ws.submitted_accepted} acceptés ===")
@@ -367,9 +369,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
             mark = "🚩" if r.solved else "❌"
             canc = f" | annulés: {','.join(r.cancelled)}" if r.cancelled else ""
             sub = f" | soumis: {r.submission.status}" if r.submission else ""
+            deb = f" | débat: {r.debate}" if r.debate else ""
             print(f"  {mark} [{r.category}] {r.name} (gagnant: "
                   f"{r.winner.value if r.winner else '—'}, essais: {r.attempts}) "
-                  f"flag: {r.flag or '—'}{sub}{canc}")
+                  f"flag: {r.flag or '—'}{sub}{deb}{canc}")
         return 0
 
     if args.parallel:

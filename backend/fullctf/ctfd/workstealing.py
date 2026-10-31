@@ -30,6 +30,7 @@ from ..playbooks.catalog import build_default_playbook_registry
 from ..playbooks.render import category_profile, render_playbook
 from ..runner.persistence import build_insights_block, summarize_attempt
 from ..runner.real_mission import DEFAULT_PROVIDER_ORDER
+from ..swarm.debate import _interpret as interpret_verdict
 from ..verifier.flag_verifier import FlagVerifier, extract_flags
 from ..verifier.injection_guard import partition_candidates
 from .client import CTFdChallenge, SubmissionResult
@@ -46,6 +47,7 @@ class _ChallState:
     winner: AgentProvider | None = None
     flag: str | None = None
     submission: SubmissionResult | None = None
+    debate: str = ""  # verdict de la vérification croisée (ex: "codex: AGREE")
     cancelled_providers: set[AgentProvider] = field(default_factory=set)
     tried_by: set[AgentProvider] = field(default_factory=set)
     findings: list[str] = field(default_factory=list)
@@ -61,6 +63,7 @@ class WSResult:
     winner: AgentProvider | None
     flag: str | None
     submission: SubmissionResult | None
+    debate: str
     cancelled: list[str]
     attempts: int
 
@@ -89,6 +92,7 @@ def solve_ctf_workstealing(
     only_ids: set[int] | None = None,
     limit: int | None = None,
     auto_submit: bool = False,
+    debate: bool = False,
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
     agents_md: str | Path | None = None,
@@ -144,6 +148,26 @@ def solve_ctf_workstealing(
             st = cands[0]
             st.tried_by.add(provider)
             return st
+
+    def _review_flag(reviewer: AgentProvider, st: _ChallState, flag_val: str,
+                     proposer: AgentProvider) -> bool:
+        """Vérification croisée : un autre agent confirme (AGREE) ou réfute (DISAGREE)."""
+        objective = (
+            f"VÉRIFICATION CROISÉE (débat). L'agent {proposer.value} propose ce flag "
+            f"pour le challenge « {st.ch.name} » : {flag_val}\n"
+            "Vérifie de façon critique et INDÉPENDANTE si c'est bien le vrai flag "
+            "(tu peux re-tester sur la cible / relire la source). "
+            "Réponds AGREE si tu confirmes, DISAGREE sinon, suivi d'une courte justification."
+        )
+        ad = ContainerAgentAdapter(
+            reviewer, challenge_files_dir=st.files_dir, target=st.target,
+            description=st.ch.description,
+            mode=ExecutionMode.CONNECTED if st.target else ExecutionMode.LOCAL_ONLY,
+            image=image, agents_md=agents_md, exec_run=exec_run,
+        )
+        res = ad.run_mission(objective, "", time_budget_seconds)
+        _write_trace(data_root, st, reviewer, res.success, f"[REVUE] {res.output or ''}")
+        return interpret_verdict(res.output) if res.success else False
 
     def run_one(provider: AgentProvider, st: _ChallState) -> None:
         print(f"  → {provider.value} prend [{st.ch.category}] {st.ch.name} (id={st.ch.id})", flush=True)
@@ -210,10 +234,21 @@ def solve_ctf_workstealing(
                     first = False
             if first:
                 print(f"  🚩 {provider.value} trouve le flag de {st.ch.name} : {flag_val}", flush=True)
-                if auto_submit:
+                # Débat : un AUTRE agent confirme/réfute AVANT la soumission.
+                do_submit = auto_submit
+                if auto_submit and debate:
+                    reviewer = next((p for p in providers if p != provider), None)
+                    if reviewer is not None:
+                        agree = _review_flag(reviewer, st, flag_val, provider)
+                        st.debate = f"{reviewer.value}: {'AGREE' if agree else 'DISAGREE'}"
+                        do_submit = agree
+                        print(f"     débat: {reviewer.value} → {'AGREE ✓' if agree else 'DISAGREE ✗'}", flush=True)
+                if do_submit:
                     with http_lock:
                         st.submission = connector.submit(st.ch.id, flag_val)
                     print(f"     submit={st.submission.status}", flush=True)
+                elif auto_submit and debate:
+                    print(f"     non soumis (désaccord du débat) → proposé pour validation humaine", flush=True)
             return
 
         # échec : on garde les trouvailles pour les suivants (bump)
@@ -238,7 +273,7 @@ def solve_ctf_workstealing(
         WSResult(
             ctfd_id=st.ch.id, name=st.ch.name, category=st.ch.category,
             solved=st.solved, winner=st.winner, flag=st.flag,
-            submission=st.submission,
+            submission=st.submission, debate=st.debate,
             cancelled=[p.value for p in st.cancelled_providers],
             attempts=len(st.tried_by),
         )

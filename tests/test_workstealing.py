@@ -100,3 +100,40 @@ def test_workstealing_decoy_not_accepted(fake_home, tmp_path):
                                difficulty=Difficulty.EASY, auto_submit=True, exec_run=exec_run)
     assert s.solved == 0
     assert http.submitted == []       # un leurre n'est jamais soumis
+
+
+def test_debate_agree_submits(fake_home, tmp_path):
+    http = _Http(1)
+    connector = CTFdConnector("https://x", token="t", http=http)
+
+    def exec_run(argv, timeout):
+        if "VÉRIFICATION CROISÉE" in argv[-1]:
+            return (0, "AGREE - j'ai re-testé, le flag est correct")
+        return (0, "FLAG: CTF{confirmed1234567}")
+
+    s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                               difficulty=Difficulty.EASY, auto_submit=True,
+                               debate=True, exec_run=exec_run)
+    assert s.solved == 1 and s.submitted_accepted == 1
+    assert "AGREE" in s.results[0].debate
+    assert len(http.submitted) == 1
+
+
+def test_debate_disagree_blocks_submission(fake_home, tmp_path):
+    http = _Http(1)
+    connector = CTFdConnector("https://x", token="t", http=http)
+
+    def exec_run(argv, timeout):
+        if "VÉRIFICATION CROISÉE" in argv[-1]:
+            return (0, "DISAGREE - ce flag ne marche pas chez moi")
+        return (0, "FLAG: CTF{doubtful12345678}")
+
+    s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                               difficulty=Difficulty.EASY, auto_submit=True,
+                               debate=True, exec_run=exec_run)
+    # flag trouvé (solved) mais NON soumis car le débat a réfuté
+    assert s.results[0].solved is True
+    assert s.results[0].flag == "CTF{doubtful12345678}"
+    assert "DISAGREE" in s.results[0].debate
+    assert http.submitted == []            # rien soumis
+    assert s.submitted_accepted == 0
