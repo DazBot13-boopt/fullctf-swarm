@@ -155,3 +155,22 @@ def test_debate_approval_gate_can_block(fake_home, tmp_path):
     assert s.solved == 0
     assert seen["debate_calls"] == 0                 # débat jamais lancé
     assert "non autorisé" in s.results[0].debate
+
+
+def test_agents_filter_excludes_cursor(fake_home, tmp_path):
+    """--agents claude,codex : Cursor n'est pas utilisé."""
+    http = _Http(1)
+    connector = CTFdConnector("https://x", token="t", http=http)
+    used = set()
+
+    def exec_run(argv, timeout):
+        for a in ("claude", "codex", "cursor-agent"):
+            if a in argv:
+                used.add("cursor" if a == "cursor-agent" else a)
+        return (0, "rien trouvé")
+
+    solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                           difficulty=Difficulty.EASY, agents=["claude", "codex"],
+                           exec_run=exec_run)
+    assert "cursor" not in used      # Cursor exclu
+    assert used <= {"claude", "codex"}

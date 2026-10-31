@@ -343,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     p.add_argument("--debate", action="store_true",
                    help="Un autre agent confirme/réfute le flag avant toute soumission.")
     p.add_argument("--ids", default=None, help="Cibler des challenges précis, ex: 21,18,22")
+    p.add_argument("--agents", default=None,
+                   help="Limiter les agents, ex: claude,codex (défaut: tous ceux authentifiés)")
     p.add_argument("--no-verify-tls", action="store_true")
     p.add_argument("--data-root", default="/tmp/fullctf-ctfd")
     p.add_argument("--image", default="fullctf-worker:latest")
@@ -358,10 +360,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
 
     if args.workstealing:
         from .workstealing import solve_ctf_workstealing
+        agents = [a.strip() for a in args.agents.split(",")] if args.agents else None
         ws = solve_ctf_workstealing(
             connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
             categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
-            debate=args.debate, image=args.image, time_budget_seconds=args.timeout,
+            debate=args.debate, agents=agents, image=args.image,
+            time_budget_seconds=args.timeout,
         )
         print(f"\n=== CTF (work-stealing) : {ws.solved}/{ws.total} résolus, "
               f"{ws.submitted_accepted} acceptés ===")

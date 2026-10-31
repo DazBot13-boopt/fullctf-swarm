@@ -81,11 +81,28 @@ class WSSummary:
     results: list[WSResult] = field(default_factory=list)
 
 
-def _usable_providers(exec_run: ExecRun | None) -> list[AgentProvider]:
+def _usable_providers(
+    exec_run: ExecRun | None, allowed: set[AgentProvider] | None = None
+) -> list[AgentProvider]:
     reg = AgentRegistry()
     for prov in DEFAULT_PROVIDER_ORDER:
+        if allowed is not None and prov not in allowed:
+            continue
         reg.register(ContainerAgentAdapter(prov, challenge_files_dir=".", exec_run=exec_run))
     return reg.usable_providers()
+
+
+def _parse_agents(agents: list[str] | None) -> set[AgentProvider] | None:
+    """Convertit ['claude','codex'] -> set de providers (None = tous)."""
+    if not agents:
+        return None
+    out = set()
+    for a in agents:
+        a = a.strip().lower()
+        for prov in AgentProvider:
+            if prov.value == a:
+                out.add(prov)
+    return out or None
 
 
 def _map_category(ctfd_category: str) -> Category:
@@ -117,6 +134,7 @@ def solve_ctf_workstealing(
     auto_submit: bool = False,
     debate: bool = False,
     approval_gate: ApprovalGate | None = None,
+    agents: list[str] | None = None,
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
     agents_md: str | Path | None = None,
@@ -124,9 +142,10 @@ def solve_ctf_workstealing(
 ) -> WSSummary:
     if not connector.authenticate():
         raise RuntimeError("Authentification CTFd échouée.")
-    providers = _usable_providers(exec_run)
+    providers = _usable_providers(exec_run, _parse_agents(agents))
     if not providers:
-        raise RuntimeError("Aucun agent authentifié sur l'hôte.")
+        raise RuntimeError("Aucun agent utilisable (vérifie --agents et l'auth hôte).")
+    print(f"agents actifs : {', '.join(p.value for p in providers)}", flush=True)
 
     listed = connector.list_unsolved(categories, only_ids=only_ids)
     if limit is not None:
