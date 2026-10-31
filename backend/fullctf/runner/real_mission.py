@@ -197,6 +197,20 @@ def solve_challenge(
 
             # Trouvailles de cet essai -> transmises aux suivants (bump).
             out = outcome.evidences[-1].observation if outcome.evidences else ""
+            # Trace par agent : qui a fait quoi (répond à "Codex a bossé sur quoi ?").
+            try:
+                tdir = Path(data_root) / "traces"
+                tdir.mkdir(parents=True, exist_ok=True)
+                (tdir / f"{prov.value}_essai{attempt_no}.log").write_text(
+                    f"challenge: {challenge.title} ({plan.category})\n"
+                    f"agent: {prov.value}  essai: {attempt_no}\n"
+                    f"statut: {outcome.status.value}  note: {outcome.notes}\n"
+                    f"flag: {outcome.flag.value if outcome.flag else '—'}\n"
+                    f"{'-' * 60}\n{out}\n",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             prior_findings.append(f"[{prov.value} essai {attempt_no}] {summarize_attempt(out)}")
             # Anti-boucle : si aucun progrès vs l'essai précédent, on arrête ce provider.
             if last_output is not None and no_progress(last_output, out):

@@ -291,6 +291,8 @@ def solve_ctf_parallel(
                 listed = q.get_nowait()
             except queue.Empty:
                 return
+            print(f"  → {provider.value} prend [{listed.category}] {listed.name} (id={listed.id})",
+                  flush=True)
             try:
                 process(listed, [provider])  # un seul agent sur ce challenge
             finally:
