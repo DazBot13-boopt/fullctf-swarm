@@ -30,6 +30,8 @@ from ..models.challenge import Category, Challenge, Difficulty
 from ..models.flag import FlagStatus
 from ..models.mission import AgentProvider, Mission, MissionStatus
 from ..models.policies import AutonomyPolicy, ExecutionMode
+from ..playbooks.catalog import build_default_playbook_registry
+from ..playbooks.render import category_profile, render_playbook
 from ..reports.report import build_markdown_report
 from ..runner.mission_runner import (
     ApprovalGate,
@@ -115,9 +117,22 @@ def solve_challenge(
             )
         )
 
-    # Commander : classification + allocation (easy -> Single).
-    commander = Commander(registry, default_autonomy=autonomy)
+    # Commander : classification + allocation (easy -> Single) + sélection playbook.
+    playbooks = build_default_playbook_registry()
+    commander = Commander(registry, default_autonomy=autonomy, playbook_registry=playbooks)
     plan = commander.plan(challenge)
+
+    # Prompt enrichi : profil d'expert de la catégorie + playbook éprouvé.
+    category = Category(plan.category) if plan.category in Category._value2member_map_ else Category.UNKNOWN
+    enriched = challenge.model_copy(update={"category": category})
+    selected_playbook = playbooks.select(enriched)
+    objective = "\n\n".join(
+        s for s in (
+            f"Résous le challenge « {challenge.title} » (catégorie {plan.category}).",
+            category_profile(category),
+            render_playbook(selected_playbook),
+        ) if s
+    )
 
     usable = registry.usable_providers()
     if not usable:
@@ -146,7 +161,8 @@ def solve_challenge(
             challenge_id=challenge.id,
             agent_provider=prov,
             specialist_profile=plan.category,
-            objective=f"Résous le challenge « {challenge.title} » (catégorie {plan.category}).",
+            objective=objective,
+            playbook_id=selected_playbook.id if selected_playbook else None,
             autonomy_policy=autonomy,
             time_budget_seconds=time_budget_seconds,
         )

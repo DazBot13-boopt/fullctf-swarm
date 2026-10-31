@@ -164,3 +164,23 @@ def test_real_flag_wins_over_decoy(fake_home, tmp_path):
     assert res.solved
     assert res.flag_value == "CTF{a1428a3ae5db7d74}"
     assert res.decoys_detected >= 1
+
+
+def test_prompt_includes_profile_and_playbook(fake_home, tmp_path):
+    """Le prompt injecte le profil d'expert + le playbook de la catégorie."""
+    files = tmp_path / "files"; files.mkdir()
+    captured = {}
+
+    def exec_run(argv, timeout):
+        captured["prompt"] = argv[-1]
+        return (0, "FLAG: CTF{aaaabbbbccccdddd}")
+
+    res = solve_challenge(
+        _challenge(), files_dir=files, data_root=tmp_path / "data",
+        target="t:1", exec_run=exec_run,
+    )
+    assert res.solved
+    prompt = captured["prompt"]
+    assert "PROFIL : expert WEB" in prompt       # profil catégorie
+    assert "PLAYBOOK" in prompt                   # démarche playbook
+    assert "ffuf" in prompt or "sqlmap" in prompt
