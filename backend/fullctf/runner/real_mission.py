@@ -33,6 +33,7 @@ from ..models.policies import AutonomyPolicy, ExecutionMode
 from ..playbooks.catalog import build_default_playbook_registry
 from ..playbooks.render import category_profile, render_playbook
 from ..reports.report import build_markdown_report
+from .persistence import build_insights_block, no_progress, summarize_attempt
 from ..runner.mission_runner import (
     ApprovalGate,
     FlagSubmitter,
@@ -87,6 +88,7 @@ def solve_challenge(
     submitter: FlagSubmitter | None = None,
     approval_gate: ApprovalGate | None = None,
     time_budget_seconds: int = 1800,
+    max_attempts_per_provider: int = 1,
     exec_run: ExecRun | None = None,
 ) -> SolveResult:
     """Résout un challenge de bout en bout, conforme à la spec."""
@@ -155,33 +157,53 @@ def solve_challenge(
     submitted = accepted = False
     decoys_total = 0
 
-    # Escalade séquentielle : un seul agent à la fois (pas les 3 en parallèle).
+    # Escalade séquentielle : un agent à la fois, avec persistance :
+    #  - bump : chaque agent reçoit les trouvailles des précédents (ne pas répéter) ;
+    #  - never give up : retries possibles par agent (max_attempts_per_provider) ;
+    #  - anti-boucle : on arrête de réessayer un agent qui ne progresse plus.
+    prior_findings: list[str] = []
     for prov in usable:
-        mission = Mission(
-            challenge_id=challenge.id,
-            agent_provider=prov,
-            specialist_profile=plan.category,
-            objective=objective,
-            playbook_id=selected_playbook.id if selected_playbook else None,
-            autonomy_policy=autonomy,
-            time_budget_seconds=time_budget_seconds,
-        )
-        outcome = runner.run(challenge, mission)
-        attempts.append(Attempt(prov, outcome.status, outcome.notes, outcome.decoys_detected))
-        all_evidences.extend(outcome.evidences)
-        decoys_total += outcome.decoys_detected
+        last_output: str | None = None
+        for attempt_no in range(1, max(1, max_attempts_per_provider) + 1):
+            obj = objective
+            insights = build_insights_block(prior_findings)
+            if insights:
+                obj = f"{objective}\n\n{insights}"
+            mission = Mission(
+                challenge_id=challenge.id,
+                agent_provider=prov,
+                specialist_profile=plan.category,
+                objective=obj,
+                playbook_id=selected_playbook.id if selected_playbook else None,
+                autonomy_policy=autonomy,
+                time_budget_seconds=time_budget_seconds,
+            )
+            outcome = runner.run(challenge, mission)
+            note = outcome.notes if attempt_no == 1 else f"essai {attempt_no}: {outcome.notes}"
+            attempts.append(Attempt(prov, outcome.status, note, outcome.decoys_detected))
+            all_evidences.extend(outcome.evidences)
+            decoys_total += outcome.decoys_detected
 
-        got_flag = (
-            outcome.flag is not None
-            and outcome.flag.validation_status != FlagStatus.REJECTED
-        )
-        if got_flag:
-            winning = prov
-            final_flag = outcome.flag
-            submitted = outcome.submitted
-            accepted = outcome.accepted
+            got_flag = (
+                outcome.flag is not None
+                and outcome.flag.validation_status != FlagStatus.REJECTED
+            )
+            if got_flag:
+                winning = prov
+                final_flag = outcome.flag
+                submitted = outcome.submitted
+                accepted = outcome.accepted
+                break
+
+            # Trouvailles de cet essai -> transmises aux suivants (bump).
+            out = outcome.evidences[-1].observation if outcome.evidences else ""
+            prior_findings.append(f"[{prov.value} essai {attempt_no}] {summarize_attempt(out)}")
+            # Anti-boucle : si aucun progrès vs l'essai précédent, on arrête ce provider.
+            if last_output is not None and no_progress(last_output, out):
+                break
+            last_output = out
+        if winning is not None:
             break
-        # sinon : refus/filtre/échec/aucun flag -> on escalade vers l'agent suivant
 
     agents_line = [
         f"{a.provider.value}: {a.status.value} — {a.notes}" for a in attempts
