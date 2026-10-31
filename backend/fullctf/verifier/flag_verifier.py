@@ -17,14 +17,29 @@ DEFAULT_FLAG_PATTERN = re.compile(r"^[A-Za-z0-9_]{2,15}\{[^\n}]{1,200}\}$")
 # Version non ancrée, pour EXTRAIRE des flags au milieu d'un texte (sortie d'agent).
 _FLAG_FINDALL = re.compile(r"[A-Za-z0-9_]{2,15}\{[^\n}]{1,200}\}")
 
+def is_placeholder_flag(value: str) -> bool:
+    """True si le candidat est manifestement un placeholder, pas un vrai flag.
+
+    On se base sur le CONTENU (pas le préfixe : « flag{…} » / « ctf{…} » sont de
+    vrais préfixes courants). Un vrai flag ne contient jamais « ... »/« … », et un
+    contenu vide ou d'exemple (XXX) trahit un gabarit de prompt (ex. NOM{...}).
+    """
+    if "..." in value or "…" in value:
+        return True
+    inside = value[value.find("{") + 1: value.rfind("}")].strip()
+    return not inside or inside.lower() in {"x", "xx", "xxx", "xxxx", "flag", "placeholder"}
+
 
 def extract_flags(text: str) -> list[str]:
     """Extrait les flags candidats d'un texte libre (sortie d'agent/outil).
 
-    Retourne les occurrences uniques, dans l'ordre d'apparition.
+    Retourne les occurrences uniques, dans l'ordre d'apparition. Les placeholders
+    de format (NOM{...}, FLAG{...}, ...) sont écartés : jamais de faux flag.
     """
     seen: dict[str, None] = {}
     for match in _FLAG_FINDALL.findall(text or ""):
+        if is_placeholder_flag(match):
+            continue
         seen.setdefault(match, None)
     return list(seen.keys())
 

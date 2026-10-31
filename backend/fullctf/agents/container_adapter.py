@@ -118,7 +118,8 @@ class ContainerAgentAdapter(AgentAdapter):
         if self.description:
             parts.append(wrap_untrusted("énoncé du challenge", self.description))
         parts.append(
-            "LIVRABLE : 1) FLAG exact (format NOM{...}) ; 2) VULNÉRABILITÉ (1-2 phrases) ; "
+            "LIVRABLE : 1) le FLAG exact (sa vraie valeur telle que lue sur la cible, "
+            "PAS un exemple de format) ; 2) VULNÉRABILITÉ (1-2 phrases) ; "
             "3) REPRODUCTION (commandes exactes). Ne soumets rien toi-même. "
             "Ne prétends pas avoir réussi sans avoir obtenu le flag depuis la cible."
         )

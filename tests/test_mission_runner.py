@@ -123,7 +123,7 @@ def test_human_checkpoint_blocks_until_approval(tmp_path, challenge):
     submitter = _Submitter(accept=True)
     gate = _Gate(approve=False)  # l'humain n'approuve pas
     runner, _ = _runner(
-        tmp_path, "FLAG{x}", reproducer=lambda f, ws: True,
+        tmp_path, "FLAG{winner}", reproducer=lambda f, ws: True,
         submitter=submitter, approval=gate,
     )
     m = _mission(challenge.id, auto_submit_flag=True, human_checkpoints=True)

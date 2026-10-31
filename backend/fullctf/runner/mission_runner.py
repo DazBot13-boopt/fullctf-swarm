@@ -103,7 +103,7 @@ class MissionRunner:
             parts.append(f"Playbook suggéré : {mission.playbook_id}.")
         if mission.allowed_tools:
             parts.append(f"Outils disponibles : {', '.join(mission.allowed_tools)}.")
-        parts.append("Si tu trouves le flag, affiche-le au format NOM{...}.")
+        parts.append("Si tu trouves le flag, affiche sa valeur exacte (pas un exemple de format).")
         return " ".join(parts)
 
     def run(self, challenge: Challenge, mission: Mission) -> MissionOutcome:
