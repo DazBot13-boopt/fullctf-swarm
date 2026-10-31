@@ -39,6 +39,7 @@ class CTFdChallenge(BaseModel):
     category: str
     value: int
     solved: bool = False
+    solves: int = 0  # nombre de résolutions (popularité ~ facilité)
     # Détails (remplis par get_challenge) :
     description: str = ""
     connection_info: str | None = None  # cible live (host:port / URL) si fournie
@@ -77,6 +78,7 @@ class CTFdClient:
             CTFdChallenge(
                 id=c["id"], name=c.get("name", ""), category=c.get("category", ""),
                 value=c.get("value", 0), solved=c.get("solved_by_me", False),
+                solves=c.get("solves", 0),
             )
             for c in data
         ]

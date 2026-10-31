@@ -89,11 +89,15 @@ class CTFdConnector:
             return bool(self._httpx.login(self._username, self._password))
         return True
 
-    def list_unsolved(self, categories: list[str] | None = None) -> list[CTFdChallenge]:
+    def list_unsolved(
+        self, categories: list[str] | None = None, only_ids: set[int] | None = None
+    ) -> list[CTFdChallenge]:
         wanted = {c.lower() for c in categories} if categories else None
         out = []
         for c in self.client.list_challenges():
             if c.solved:
+                continue
+            if only_ids is not None and c.id not in only_ids:
                 continue
             if wanted and c.category.lower() not in wanted:
                 continue
@@ -217,6 +221,7 @@ def solve_ctf_parallel(
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
     escalate_unsolved: bool = True,
+    only_ids: set[int] | None = None,
     exec_run: ExecRun | None = None,
 ) -> CTFRunSummary:
     """Résout les challenges EN PARALLÈLE : chaque agent prend un challenge différent.
@@ -236,7 +241,7 @@ def solve_ctf_parallel(
     if not providers:
         raise RuntimeError("Aucun agent authentifié sur l'hôte.")
 
-    challenges = connector.list_unsolved(categories)
+    challenges = connector.list_unsolved(categories, only_ids=only_ids)
     if limit is not None:
         challenges = challenges[:limit]
 
