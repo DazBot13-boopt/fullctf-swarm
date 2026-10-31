@@ -18,6 +18,7 @@ Exécution injectable (exec_run) pour être testable sans Docker.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -135,6 +136,7 @@ def solve_ctf_workstealing(
     debate: bool = False,
     approval_gate: ApprovalGate | None = None,
     agents: list[str] | None = None,
+    control=None,  # MissionControl : supervision live (pause/stop/forcer débat)
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
     agents_md: str | Path | None = None,
@@ -175,6 +177,41 @@ def solve_ctf_workstealing(
             ch=detailed, files_dir=files_dir,
             target=detailed.connection_info, base_objective=base_obj,
         )
+
+    def _snapshot() -> dict:
+        chs = []
+        with lock:
+            for st in states.values():
+                if st.solved:
+                    status = "résolu"
+                elif st.adapters:
+                    status = "en cours"
+                elif st.tried_by.issuperset(set(providers)):
+                    status = "bloqué"
+                else:
+                    status = "en attente"
+                chs.append({
+                    "id": st.ch.id, "name": st.ch.name, "category": st.ch.category,
+                    "status": status,
+                    "agents_on": [p.value for p in st.adapters],
+                    "tried_by": [p.value for p in st.tried_by],
+                    "winner": st.winner.value if st.winner else None,
+                    "flag": st.flag, "debate": st.debate,
+                    "submission": st.submission.status if st.submission else None,
+                })
+        return {
+            "agents": [p.value for p in providers],
+            "total": len(states),
+            "solved": sum(1 for s in states.values() if s.solved),
+            "challenges": chs,
+        }
+
+    def _publish() -> None:
+        if control is not None:
+            try:
+                control.publish(_snapshot())
+            except Exception:
+                pass
 
     def _new_adapter(provider: AgentProvider, st: _ChallState) -> ContainerAgentAdapter:
         return ContainerAgentAdapter(
@@ -299,32 +336,46 @@ def solve_ctf_workstealing(
             _claim_flag(provider, st, flag_val)
             return
 
-        # échec : on garde les trouvailles (bump) ; si TOUS ont tenté -> débat.
+        # échec : on garde les trouvailles (bump) ; débat si TOUS ont tenté OU forcé.
         with lock:
             st.findings.append(f"[{provider.value}] {summarize_attempt(out)}")
-            trigger_debate = (
+            forced = (
+                control is not None and not st.solved and not st.debate_done
+                and st.ch.id in control.force_debate_ids()
+            )
+            trigger_debate = forced or (
                 debate and not st.solved and not st.debate_done
                 and st.tried_by.issuperset(set(providers))
             )
             if trigger_debate:
                 st.debate_done = True
+        if forced and control is not None:
+            control.clear_force_debate(st.ch.id)
         if trigger_debate:
+            print(f"  💬 débat {'forcé (superviseur)' if forced else 'auto'} sur {st.ch.name}", flush=True)
             _run_debate(provider, st)
 
     def agent_loop(provider: AgentProvider) -> None:
         while True:
+            if control is not None and control.stopped():
+                return
+            while control is not None and control.paused() and not control.stopped():
+                time.sleep(1.0)
             st = pick(provider)
             if st is None:
                 return
             run_one(provider, st)
+            _publish()
 
     print(f"=== Work-stealing : {len(providers)} agents, {len(states)} challenges "
           f"(débat={'on' if debate else 'off'}) ===", flush=True)
+    _publish()
     threads = [threading.Thread(target=agent_loop, args=(p,), daemon=True) for p in providers]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    _publish()
 
     results = [
         WSResult(

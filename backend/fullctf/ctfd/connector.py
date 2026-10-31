@@ -359,12 +359,15 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     ids = {int(x) for x in args.ids.split(",")} if args.ids else None
 
     if args.workstealing:
+        from ..supervisor.mission_control import MissionControl
         from .workstealing import solve_ctf_workstealing
         agents = [a.strip() for a in args.agents.split(",")] if args.agents else None
+        control = MissionControl(args.data_root)  # supervision live (status/pause/stop/débat)
+        print(f"Supervision : python -m fullctf.supervisor.cli {args.data_root} status", flush=True)
         ws = solve_ctf_workstealing(
             connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
             categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
-            debate=args.debate, agents=agents, image=args.image,
+            debate=args.debate, agents=agents, control=control, image=args.image,
             time_budget_seconds=args.timeout,
         )
         print(f"\n=== CTF (work-stealing) : {ws.solved}/{ws.total} résolus, "
