@@ -147,7 +147,8 @@ def solve_ctf(
         challenges = challenges[:limit]
 
     results: list[CTFChallengeResult] = []
-    for listed in challenges:
+    for idx, listed in enumerate(challenges, 1):
+        print(f"[{idx}/{len(challenges)}] {listed.category}/{listed.name} (id={listed.id})…", flush=True)
         detailed = connector.fetch(listed.id) or listed
         chall_root = Path(data_root) / f"ctfd-{listed.id}"
         files_dir = connector.download_files(detailed, chall_root)
@@ -182,6 +183,10 @@ def solve_ctf(
                 solve=solve, submission=submission,
             )
         )
+        _mark = "🚩" if solve.solved else "·"
+        _sub = f" submit={submission.status}" if submission else ""
+        print(f"      {_mark} flag={solve.flag_value or '—'} "
+              f"agent={solve.winning_agent.value if solve.winning_agent else '—'}{_sub}", flush=True)
 
     solved = sum(1 for r in results if r.solve.solved)
     accepted = sum(1 for r in results if r.submission and r.submission.accepted)
