@@ -338,6 +338,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     p.add_argument("--auto-submit", action="store_true")
     p.add_argument("--parallel", action="store_true",
                    help="Les agents traitent des challenges différents en parallèle.")
+    p.add_argument("--workstealing", action="store_true",
+                   help="Agents jamais au repos + course (1er qui trouve gagne, autres annulés).")
+    p.add_argument("--ids", default=None, help="Cibler des challenges précis, ex: 21,18,22")
     p.add_argument("--no-verify-tls", action="store_true")
     p.add_argument("--data-root", default="/tmp/fullctf-ctfd")
     p.add_argument("--image", default="fullctf-worker:latest")
@@ -349,12 +352,38 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
         verify_tls=not args.no_verify_tls,
     )
     cats = [c.strip() for c in args.categories.split(",")] if args.categories else None
-    runner = solve_ctf_parallel if args.parallel else solve_ctf
-    summary = runner(
-        connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
-        categories=cats, limit=args.limit, auto_submit=args.auto_submit,
-        image=args.image, time_budget_seconds=args.timeout,
-    )
+    ids = {int(x) for x in args.ids.split(",")} if args.ids else None
+
+    if args.workstealing:
+        from .workstealing import solve_ctf_workstealing
+        ws = solve_ctf_workstealing(
+            connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
+            categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
+            image=args.image, time_budget_seconds=args.timeout,
+        )
+        print(f"\n=== CTF (work-stealing) : {ws.solved}/{ws.total} résolus, "
+              f"{ws.submitted_accepted} acceptés ===")
+        for r in ws.results:
+            mark = "🚩" if r.solved else "❌"
+            canc = f" | annulés: {','.join(r.cancelled)}" if r.cancelled else ""
+            sub = f" | soumis: {r.submission.status}" if r.submission else ""
+            print(f"  {mark} [{r.category}] {r.name} (gagnant: "
+                  f"{r.winner.value if r.winner else '—'}, essais: {r.attempts}) "
+                  f"flag: {r.flag or '—'}{sub}{canc}")
+        return 0
+
+    if args.parallel:
+        summary = solve_ctf_parallel(
+            connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
+            categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
+            image=args.image, time_budget_seconds=args.timeout,
+        )
+    else:
+        summary = solve_ctf(
+            connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
+            categories=cats, limit=args.limit, auto_submit=args.auto_submit,
+            image=args.image, time_budget_seconds=args.timeout,
+        )
 
     print(f"\n=== CTF : {summary.solved}/{summary.total} résolus, "
           f"{summary.submitted_accepted} acceptés ===")
