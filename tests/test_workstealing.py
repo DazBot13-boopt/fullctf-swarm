@@ -174,3 +174,27 @@ def test_agents_filter_excludes_cursor(fake_home, tmp_path):
                            exec_run=exec_run)
     assert "cursor" not in used      # Cursor exclu
     assert used <= {"claude", "codex"}
+
+
+def test_workstealing_spreads_agents_on_different_challenges(fake_home, tmp_path):
+    """3 challenges, 2 agents : ils DÉMARRENT sur des challenges différents (répartition)."""
+    import threading
+    import time
+    http = _Http(3)
+    connector = CTFdConnector("https://x", token="t", http=http)
+    first_pick: dict[str, str] = {}
+    lk = threading.Lock()
+
+    def exec_run(argv, timeout):
+        prov = "claude" if "claude" in argv else "codex"
+        n = next((c for c in "123" if f"t:{c}" in argv[-1]), "0")
+        with lk:
+            first_pick.setdefault(prov, n)
+        time.sleep(0.15)  # laisse les 2 agents piocher AVANT toute résolution
+        return (0, f"FLAG: CTF{{solved{n}0000000}}")
+
+    s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                               difficulty=Difficulty.EASY, agents=["claude", "codex"],
+                               exec_run=exec_run)
+    assert s.solved == 3
+    assert first_pick["claude"] != first_pick["codex"]  # pas le même challenge au départ

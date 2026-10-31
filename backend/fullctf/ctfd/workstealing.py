@@ -250,7 +250,9 @@ def solve_ctf_workstealing(
             cands = [s for s in states.values() if not s.solved and provider not in s.tried_by]
             if not cands:
                 return None
-            cands.sort(key=lambda s: (len(s.adapters), -s.ch.solves))
+            # Répartir : préférer le challenge le MOINS assigné (tried_by compte les
+            # assignations déjà faites), puis le plus résolu (le plus facile) d'abord.
+            cands.sort(key=lambda s: (len(s.tried_by), -s.ch.solves))
             st = cands[0]
             st.tried_by.add(provider)
             return st
