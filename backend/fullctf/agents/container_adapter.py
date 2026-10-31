@@ -67,6 +67,8 @@ class ContainerAgentAdapter(AgentAdapter):
         image: str = "fullctf-worker:latest",
         codex_model: str = "gpt-5.6-terra",
         agents_md: str | Path | None = None,
+        memory_mb: int = 4096,   # ResourceBudget (spec §10 : limitation RAM)
+        cpus: float = 2.0,       # ResourceBudget (spec §10 : limitation CPU)
         exec_run: ExecRun | None = None,
     ) -> None:
         self.provider = provider
@@ -77,6 +79,8 @@ class ContainerAgentAdapter(AgentAdapter):
         self.image = image
         self.codex_model = codex_model
         self.agents_md = Path(agents_md) if agents_md else None
+        self.memory_mb = memory_mb
+        self.cpus = cpus
         self._exec = exec_run or self._docker_exec
         self._proc: subprocess.Popen[str] | None = None
 
@@ -129,6 +133,9 @@ class ContainerAgentAdapter(AgentAdapter):
         home = _home()
         argv = [
             "docker", "run", "--rm",
+            # Limitation ressources (spec §10) : garde-fou OOM/CPU sur l'hôte.
+            "--memory", f"{self.memory_mb}m", "--memory-swap", f"{self.memory_mb}m",
+            "--cpus", str(self.cpus),
             "--cap-add=NET_RAW", "--cap-add=NET_ADMIN",
             "-e", "IS_SANDBOX=1",
         ]

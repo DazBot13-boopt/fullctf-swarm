@@ -139,6 +139,8 @@ def solve_ctf_workstealing(
     control=None,  # MissionControl : supervision live (pause/stop/forcer débat)
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
+    memory_mb: int = 2048,   # RAM/conteneur (spec §10) ; défaut sûr pour 3 agents parallèles
+    cpus: float = 1.5,       # vCPU/conteneur (spec §10)
     agents_md: str | Path | None = None,
     exec_run: ExecRun | None = None,
 ) -> WSSummary:
@@ -218,7 +220,8 @@ def solve_ctf_workstealing(
             provider, challenge_files_dir=st.files_dir, target=st.target,
             description=st.ch.description,
             mode=ExecutionMode.CONNECTED if st.target else ExecutionMode.LOCAL_ONLY,
-            image=image, agents_md=agents_md, exec_run=exec_run,
+            image=image, agents_md=agents_md,
+            memory_mb=memory_mb, cpus=cpus, exec_run=exec_run,
         )
 
     def _extract_flag(out: str) -> str | None:

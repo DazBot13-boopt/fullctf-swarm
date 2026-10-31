@@ -349,6 +349,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
     p.add_argument("--data-root", default="/tmp/fullctf-ctfd")
     p.add_argument("--image", default="fullctf-worker:latest")
     p.add_argument("--timeout", type=int, default=1800)
+    p.add_argument("--mem-mb", type=int, default=2048, help="RAM max par conteneur (spec §10)")
+    p.add_argument("--cpus", type=float, default=1.5, help="vCPU max par conteneur (spec §10)")
     args = p.parse_args(argv)
 
     connector = CTFdConnector(
@@ -368,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover
             connector, data_root=args.data_root, difficulty=Difficulty(args.difficulty),
             categories=cats, only_ids=ids, limit=args.limit, auto_submit=args.auto_submit,
             debate=args.debate, agents=agents, control=control, image=args.image,
-            time_budget_seconds=args.timeout,
+            time_budget_seconds=args.timeout, memory_mb=args.mem_mb, cpus=args.cpus,
         )
         print(f"\n=== CTF (work-stealing) : {ws.solved}/{ws.total} résolus, "
               f"{ws.submitted_accepted} acceptés ===")

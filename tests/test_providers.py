@@ -60,3 +60,18 @@ def test_prompt_is_always_last_argument():
     for make in (make_codex_adapter, make_claude_adapter, make_cursor_adapter):
         for auto in (True, False):
             assert _cmd(make(auto=auto), "trouve le flag")[-1] == "trouve le flag"
+
+
+def test_container_adapter_applies_resource_limits():
+    """Spec §10 : chaque conteneur a une limite RAM + CPU (garde-fou OOM)."""
+    from fullctf.agents.container_adapter import ContainerAgentAdapter
+    from fullctf.models.mission import AgentProvider
+    captured = {}
+    ad = ContainerAgentAdapter(
+        AgentProvider.CLAUDE, challenge_files_dir="/tmp", memory_mb=1500, cpus=1.0,
+        exec_run=lambda argv, t: (captured.setdefault("argv", argv), (0, "ok"))[1],
+    )
+    ad.run_mission("x", "/ws", 30)
+    argv = captured["argv"]
+    assert "--memory" in argv and "1500m" in argv
+    assert "--cpus" in argv and "1.0" in argv
