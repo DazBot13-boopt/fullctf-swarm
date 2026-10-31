@@ -1,22 +1,24 @@
-"""Dispatcher WORK-STEALING + coordination de course.
+"""Dispatcher WORK-STEALING + débat anti-blocage + coordination de course.
 
-Objectif (demandé explicitement) :
-- **Aucun agent au repos** tant qu'il reste du travail utile : dès qu'un agent se
-  libère, il reprend un challenge non résolu qu'il n'a pas encore tenté (renfort).
-- **Plusieurs agents sur un challenge dur** = course ; le **1er qui trouve gagne**,
-  les autres sur CE challenge sont **annulés** (stop de leur conteneur, pas de
-  calcul gâché).
-- **Traçabilité totale** : qui prend quoi, qui gagne, qui est annulé — en direct et
-  dans des fichiers de trace par agent.
+- **Agents jamais au repos** : dès qu'un agent se libère, il reprend un challenge
+  non résolu qu'il n'a pas encore tenté (renfort réparti).
+- **Course** : si plusieurs agents sont sur le même challenge, le 1er qui trouve le
+  flag GAGNE ; les autres sur CE challenge sont **annulés** (stop du conteneur).
+- **Débat anti-blocage** (le vrai sens voulu) : quand **TOUS** les agents ont tenté
+  un challenge **sans trouver** le flag, on les **oblige à débattre** — ils mettent
+  leurs trouvailles en commun et concluent la meilleure piste — puis **UN SEUL**
+  agent continue avec cette conclusion (les autres restent libres pour le reste).
+  Déclenché automatiquement par le code ; un point d'approbation (`approval_gate`)
+  permet d'exiger l'accord humain avant (le "bouton").
 
-Réutilise les briques FullCTF : worker en conteneur (ContainerAgentAdapter),
-anti-injection + Flag Verifier, bump d'insights. Exécution injectable (exec_run)
-pour être testable sans Docker.
+Réutilise : worker en conteneur, anti-injection + Flag Verifier, bump d'insights.
+Exécution injectable (exec_run) pour être testable sans Docker.
 """
 
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,10 +32,12 @@ from ..playbooks.catalog import build_default_playbook_registry
 from ..playbooks.render import category_profile, render_playbook
 from ..runner.persistence import build_insights_block, summarize_attempt
 from ..runner.real_mission import DEFAULT_PROVIDER_ORDER
-from ..swarm.debate import _interpret as interpret_verdict
 from ..verifier.flag_verifier import FlagVerifier, extract_flags
 from ..verifier.injection_guard import partition_candidates
 from .client import CTFdChallenge, SubmissionResult
+
+# Point d'approbation : reçoit le nom du challenge, retourne True pour autoriser le débat.
+ApprovalGate = Callable[[str], bool]
 
 
 @dataclass
@@ -47,11 +51,12 @@ class _ChallState:
     winner: AgentProvider | None = None
     flag: str | None = None
     submission: SubmissionResult | None = None
-    debate: str = ""  # verdict de la vérification croisée (ex: "codex: AGREE")
+    debate: str = ""          # résumé du débat (conclusion + qui continue)
+    debate_done: bool = False  # un débat a déjà eu lieu pour ce challenge
     cancelled_providers: set[AgentProvider] = field(default_factory=set)
     tried_by: set[AgentProvider] = field(default_factory=set)
     findings: list[str] = field(default_factory=list)
-    adapters: dict = field(default_factory=dict)  # provider -> adapter en cours (pour cancel)
+    adapters: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -83,6 +88,24 @@ def _usable_providers(exec_run: ExecRun | None) -> list[AgentProvider]:
     return reg.usable_providers()
 
 
+def _map_category(ctfd_category: str) -> Category:
+    from .connector import map_category
+    return map_category(ctfd_category)
+
+
+def _write_trace(data_root, st: _ChallState, provider: AgentProvider, tag: str, out: str) -> None:
+    try:
+        tdir = Path(data_root) / f"ctfd-{st.ch.id}" / "traces"
+        tdir.mkdir(parents=True, exist_ok=True)
+        (tdir / f"{provider.value}_{tag}.log").write_text(
+            f"challenge: {st.ch.name} (id={st.ch.id}, {st.ch.category})\n"
+            f"agent: {provider.value}  [{tag}]\n{'-' * 60}\n{out}\n",
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
 def solve_ctf_workstealing(
     connector,
     *,
@@ -93,6 +116,7 @@ def solve_ctf_workstealing(
     limit: int | None = None,
     auto_submit: bool = False,
     debate: bool = False,
+    approval_gate: ApprovalGate | None = None,
     image: str = "fullctf-worker:latest",
     time_budget_seconds: int = 1800,
     agents_md: str | Path | None = None,
@@ -114,7 +138,6 @@ def solve_ctf_workstealing(
     http_lock = threading.Lock()
     states: dict[int, _ChallState] = {}
 
-    # Préparation (fetch + download + objectif) — sérialisée (HTTP).
     for lc in listed:
         with http_lock:
             detailed = connector.fetch(lc.id) or lc
@@ -134,57 +157,95 @@ def solve_ctf_workstealing(
             target=detailed.connection_info, base_objective=base_obj,
         )
 
-    def pick(provider: AgentProvider) -> _ChallState | None:
-        """Choisit un challenge non résolu non encore tenté par cet agent (fewest workers)."""
-        with lock:
-            cands = [
-                st for st in states.values()
-                if not st.solved and provider not in st.tried_by
-            ]
-            if not cands:
-                return None
-            # préférer le moins "chargé" (renfort réparti), puis le plus de solves (facile).
-            cands.sort(key=lambda s: (len(s.adapters), -s.ch.solves))
-            st = cands[0]
-            st.tried_by.add(provider)
-            return st
-
-    def _review_flag(reviewer: AgentProvider, st: _ChallState, flag_val: str,
-                     proposer: AgentProvider) -> bool:
-        """Vérification croisée : un autre agent confirme (AGREE) ou réfute (DISAGREE)."""
-        objective = (
-            f"VÉRIFICATION CROISÉE (débat). L'agent {proposer.value} propose ce flag "
-            f"pour le challenge « {st.ch.name} » : {flag_val}\n"
-            "Vérifie de façon critique et INDÉPENDANTE si c'est bien le vrai flag "
-            "(tu peux re-tester sur la cible / relire la source). "
-            "Réponds AGREE si tu confirmes, DISAGREE sinon, suivi d'une courte justification."
-        )
-        ad = ContainerAgentAdapter(
-            reviewer, challenge_files_dir=st.files_dir, target=st.target,
-            description=st.ch.description,
-            mode=ExecutionMode.CONNECTED if st.target else ExecutionMode.LOCAL_ONLY,
-            image=image, agents_md=agents_md, exec_run=exec_run,
-        )
-        res = ad.run_mission(objective, "", time_budget_seconds)
-        _write_trace(data_root, st, reviewer, res.success, f"[REVUE] {res.output or ''}")
-        return interpret_verdict(res.output) if res.success else False
-
-    def run_one(provider: AgentProvider, st: _ChallState) -> None:
-        print(f"  → {provider.value} prend [{st.ch.category}] {st.ch.name} (id={st.ch.id})", flush=True)
-        adapter = ContainerAgentAdapter(
+    def _new_adapter(provider: AgentProvider, st: _ChallState) -> ContainerAgentAdapter:
+        return ContainerAgentAdapter(
             provider, challenge_files_dir=st.files_dir, target=st.target,
             description=st.ch.description,
             mode=ExecutionMode.CONNECTED if st.target else ExecutionMode.LOCAL_ONLY,
             image=image, agents_md=agents_md, exec_run=exec_run,
         )
+
+    def _extract_flag(out: str) -> str | None:
+        safe, _ = partition_candidates(extract_flags(out))  # écarte les leurres d'injection
+        for cand in safe:
+            fc = verifier.check_format(
+                FlagCandidate(challenge_id="ws", value=cand, source_mission="ws")
+            )
+            if fc.validation_status == FlagStatus.FORMAT_VALID:
+                return cand
+        return None
+
+    def _claim_flag(provider: AgentProvider, st: _ChallState, flag_val: str) -> bool:
+        """Marque le challenge résolu (1er gagnant), annule les autres, soumet."""
+        with lock:
+            if st.solved:
+                return False
+            st.solved = True
+            st.winner = provider
+            st.flag = flag_val
+            st.solved_event.set()  # annule les autres sur CE challenge
+        print(f"  🚩 {provider.value} trouve le flag de {st.ch.name} : {flag_val}", flush=True)
+        if auto_submit:
+            with http_lock:
+                st.submission = connector.submit(st.ch.id, flag_val)
+            print(f"     submit={st.submission.status}", flush=True)
+        return True
+
+    def _run_debate(trigger: AgentProvider, st: _ChallState) -> None:
+        """Tous bloqués -> débat (mise en commun) -> conclusion -> UN agent continue."""
+        # Point d'approbation (le "bouton") : si fourni et refuse, on n'escalade pas.
+        if approval_gate is not None and not approval_gate(st.ch.name):
+            st.debate = "débat non autorisé (humain)"
+            print(f"  ⏸ débat sur {st.ch.name} refusé (approbation humaine)", flush=True)
+            return
+        print(f"  💬 DÉBAT sur {st.ch.name} : tous bloqués, mise en commun…", flush=True)
+        pooled = "\n\n---\n\n".join(st.findings) or "(aucune trouvaille notable)"
+        proposals: list[str] = []
+        for p in providers:
+            obj = (
+                f"DÉBAT D'ÉQUIPE sur « {st.ch.name} ». Tous les agents ont tenté SANS "
+                f"trouver le flag. Voici ce qui a été tenté :\n\n{pooled}\n\n"
+                "Propose LA meilleure prochaine approche concrète (différente de ce qui a "
+                "échoué). Sois bref et précis."
+            )
+            r = _new_adapter(p, st).run_mission(obj, "", time_budget_seconds)
+            if r.output:
+                proposals.append(f"[{p.value}] {summarize_attempt(r.output, 800)}")
+            _write_trace(data_root, st, p, "debat", r.output or "")
+        conclusion = "\n\n".join(proposals) or "(pas de conclusion)"
+        # UN SEUL agent continue avec la conclusion du débat.
+        continuer = providers[0]
+        st.debate = f"débat ({len(providers)} agents) → continue: {continuer.value}"
+        print(f"     conclusion prête → {continuer.value} continue seul", flush=True)
+        obj = (
+            f"{st.base_objective}\n\nCONCLUSION DU DÉBAT D'ÉQUIPE (suis cette piste) :\n{conclusion}"
+        )
+        r = _new_adapter(continuer, st).run_mission(obj, "", time_budget_seconds)
+        _write_trace(data_root, st, continuer, "post_debat", r.output or "")
+        flag_val = _extract_flag(r.output or "")
+        if flag_val:
+            _claim_flag(continuer, st, flag_val)
+
+    def pick(provider: AgentProvider) -> _ChallState | None:
+        with lock:
+            cands = [s for s in states.values() if not s.solved and provider not in s.tried_by]
+            if not cands:
+                return None
+            cands.sort(key=lambda s: (len(s.adapters), -s.ch.solves))
+            st = cands[0]
+            st.tried_by.add(provider)
+            return st
+
+    def run_one(provider: AgentProvider, st: _ChallState) -> None:
+        print(f"  → {provider.value} prend [{st.ch.category}] {st.ch.name} (id={st.ch.id})", flush=True)
+        adapter = _new_adapter(provider, st)
         with lock:
             st.adapters[provider] = adapter
-        # prompt = objectif + insights (bump) des essais précédents
-        with lock:
-            insights = build_insights_block(st.findings)
-        objective = st.base_objective + (f"\n\n{insights}" if insights else "")
+            objective = st.base_objective
+            ins = build_insights_block(st.findings)
+        if ins:
+            objective = f"{objective}\n\n{ins}"
 
-        # watcher : si le challenge est résolu par un autre -> on annule cet agent.
         done = threading.Event()
 
         def watcher() -> None:
@@ -204,65 +265,40 @@ def solve_ctf_workstealing(
                 st.adapters.pop(provider, None)
 
         out = result.output or ""
-        _write_trace(data_root, st, provider, result.success, out)
+        _write_trace(data_root, st, provider, "essai", out)
 
-        # annulé par la course ?
         if st.solved_event.is_set() and not result.success:
             with lock:
                 st.cancelled_providers.add(provider)
             print(f"     ✗ {provider.value} annulé sur {st.ch.name} (déjà résolu)", flush=True)
             return
 
-        # extraction + anti-leurre + format
-        safe, suspicious = partition_candidates(extract_flags(out))
-        flag_val = None
-        for cand in safe:
-            fc = verifier.check_format(FlagCandidate(challenge_id=st.ch.name, value=cand, source_mission=provider.value))
-            if fc.validation_status == FlagStatus.FORMAT_VALID:
-                flag_val = cand
-                break
-
+        flag_val = _extract_flag(out)
         if flag_val:
-            with lock:
-                if not st.solved:
-                    st.solved = True
-                    st.winner = provider
-                    st.flag = flag_val
-                    st.solved_event.set()  # annule les autres sur CE challenge
-                    first = True
-                else:
-                    first = False
-            if first:
-                print(f"  🚩 {provider.value} trouve le flag de {st.ch.name} : {flag_val}", flush=True)
-                # Débat : un AUTRE agent confirme/réfute AVANT la soumission.
-                do_submit = auto_submit
-                if auto_submit and debate:
-                    reviewer = next((p for p in providers if p != provider), None)
-                    if reviewer is not None:
-                        agree = _review_flag(reviewer, st, flag_val, provider)
-                        st.debate = f"{reviewer.value}: {'AGREE' if agree else 'DISAGREE'}"
-                        do_submit = agree
-                        print(f"     débat: {reviewer.value} → {'AGREE ✓' if agree else 'DISAGREE ✗'}", flush=True)
-                if do_submit:
-                    with http_lock:
-                        st.submission = connector.submit(st.ch.id, flag_val)
-                    print(f"     submit={st.submission.status}", flush=True)
-                elif auto_submit and debate:
-                    print(f"     non soumis (désaccord du débat) → proposé pour validation humaine", flush=True)
+            _claim_flag(provider, st, flag_val)
             return
 
-        # échec : on garde les trouvailles pour les suivants (bump)
+        # échec : on garde les trouvailles (bump) ; si TOUS ont tenté -> débat.
         with lock:
             st.findings.append(f"[{provider.value}] {summarize_attempt(out)}")
+            trigger_debate = (
+                debate and not st.solved and not st.debate_done
+                and st.tried_by.issuperset(set(providers))
+            )
+            if trigger_debate:
+                st.debate_done = True
+        if trigger_debate:
+            _run_debate(provider, st)
 
     def agent_loop(provider: AgentProvider) -> None:
         while True:
             st = pick(provider)
             if st is None:
-                return  # plus rien d'utile pour cet agent -> repos
+                return
             run_one(provider, st)
 
-    print(f"=== Work-stealing : {len(providers)} agents, {len(states)} challenges ===", flush=True)
+    print(f"=== Work-stealing : {len(providers)} agents, {len(states)} challenges "
+          f"(débat={'on' if debate else 'off'}) ===", flush=True)
     threads = [threading.Thread(target=agent_loop, args=(p,), daemon=True) for p in providers]
     for t in threads:
         t.start()
@@ -282,22 +318,3 @@ def solve_ctf_workstealing(
     solved = sum(1 for r in results if r.solved)
     accepted = sum(1 for r in results if r.submission and r.submission.accepted)
     return WSSummary(total=len(results), solved=solved, submitted_accepted=accepted, results=results)
-
-
-def _map_category(ctfd_category: str) -> Category:
-    from .connector import map_category
-    return map_category(ctfd_category)
-
-
-def _write_trace(data_root, st: _ChallState, provider: AgentProvider, success: bool, out: str) -> None:
-    try:
-        tdir = Path(data_root) / f"ctfd-{st.ch.id}" / "traces"
-        tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / f"{provider.value}.log").write_text(
-            f"challenge: {st.ch.name} (id={st.ch.id}, {st.ch.category})\n"
-            f"agent: {provider.value}  succes_run: {success}\n"
-            f"{'-' * 60}\n{out}\n",
-            encoding="utf-8",
-        )
-    except Exception:
-        pass

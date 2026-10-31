@@ -102,38 +102,56 @@ def test_workstealing_decoy_not_accepted(fake_home, tmp_path):
     assert http.submitted == []       # un leurre n'est jamais soumis
 
 
-def test_debate_agree_submits(fake_home, tmp_path):
+def test_debate_unblocks_after_all_stuck(fake_home, tmp_path):
+    """Tous les agents échouent -> débat -> UN agent continue -> trouve le flag."""
     http = _Http(1)
     connector = CTFdConnector("https://x", token="t", http=http)
 
     def exec_run(argv, timeout):
-        if "VÉRIFICATION CROISÉE" in argv[-1]:
-            return (0, "AGREE - j'ai re-testé, le flag est correct")
-        return (0, "FLAG: CTF{confirmed1234567}")
+        p = argv[-1]
+        if "CONCLUSION DU DÉBAT" in p:
+            return (0, "FLAG: CTF{found_after_debate0}")   # le continuer trouve
+        if "DÉBAT D'ÉQUIPE" in p:
+            return (0, "Je propose d'essayer l'approche alternative Z")  # proposition
+        return (0, "rien trouvé pour l'instant")            # essais normaux : échec
 
     s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
                                difficulty=Difficulty.EASY, auto_submit=True,
                                debate=True, exec_run=exec_run)
-    assert s.solved == 1 and s.submitted_accepted == 1
-    assert "AGREE" in s.results[0].debate
-    assert len(http.submitted) == 1
+    assert s.solved == 1
+    assert s.results[0].flag == "CTF{found_after_debate0}"
+    assert "débat" in s.results[0].debate
+    assert s.submitted_accepted == 1
 
 
-def test_debate_disagree_blocks_submission(fake_home, tmp_path):
+def test_no_debate_when_disabled(fake_home, tmp_path):
     http = _Http(1)
     connector = CTFdConnector("https://x", token="t", http=http)
 
     def exec_run(argv, timeout):
-        if "VÉRIFICATION CROISÉE" in argv[-1]:
-            return (0, "DISAGREE - ce flag ne marche pas chez moi")
-        return (0, "FLAG: CTF{doubtful12345678}")
+        assert "DÉBAT D'ÉQUIPE" not in argv[-1]  # jamais de débat si désactivé
+        return (0, "rien trouvé")
 
     s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
-                               difficulty=Difficulty.EASY, auto_submit=True,
-                               debate=True, exec_run=exec_run)
-    # flag trouvé (solved) mais NON soumis car le débat a réfuté
-    assert s.results[0].solved is True
-    assert s.results[0].flag == "CTF{doubtful12345678}"
-    assert "DISAGREE" in s.results[0].debate
-    assert http.submitted == []            # rien soumis
-    assert s.submitted_accepted == 0
+                               difficulty=Difficulty.EASY, debate=False, exec_run=exec_run)
+    assert s.solved == 0
+
+
+def test_debate_approval_gate_can_block(fake_home, tmp_path):
+    """Le 'bouton' : si l'humain refuse, pas de débat (pas de dépense)."""
+    http = _Http(1)
+    connector = CTFdConnector("https://x", token="t", http=http)
+    seen = {"debate_calls": 0}
+
+    def exec_run(argv, timeout):
+        if "DÉBAT D'ÉQUIPE" in argv[-1] or "CONCLUSION DU DÉBAT" in argv[-1]:
+            seen["debate_calls"] += 1
+        return (0, "rien trouvé")
+
+    s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                               difficulty=Difficulty.EASY, debate=True,
+                               approval_gate=lambda name: False,  # refus humain
+                               exec_run=exec_run)
+    assert s.solved == 0
+    assert seen["debate_calls"] == 0                 # débat jamais lancé
+    assert "non autorisé" in s.results[0].debate
