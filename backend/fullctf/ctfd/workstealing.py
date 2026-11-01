@@ -31,6 +31,8 @@ from ..models.mission import AgentProvider
 from ..models.policies import ExecutionMode
 from ..playbooks.catalog import build_default_playbook_registry
 from ..playbooks.render import category_profile, render_playbook
+from ..runner.cost_tracker import CostTracker
+from ..runner.loop_detect import LOOP_WARNING_MESSAGE, detect_loop
 from ..runner.persistence import build_insights_block, summarize_attempt
 from ..runner.real_mission import DEFAULT_PROVIDER_ORDER
 from ..verifier.flag_verifier import FlagVerifier, extract_flags
@@ -167,6 +169,7 @@ def solve_ctf_workstealing(
     http_lock = threading.Lock()
     states: dict[int, _ChallState] = {}
     dead: set[AgentProvider] = set()  # agents retirés (limite d'usage atteinte)
+    effort = CostTracker()            # durée/tentatives/tokens par agent
 
     for lc in listed:
         with http_lock:
@@ -328,9 +331,11 @@ def solve_ctf_workstealing(
 
         wt = threading.Thread(target=watcher, daemon=True)
         wt.start()
+        t0 = time.monotonic()
         try:
             result = adapter.run_mission(objective, "", time_budget_seconds)
         finally:
+            elapsed = time.monotonic() - t0
             done.set()
             wt.join(timeout=2)
             with lock:
@@ -356,13 +361,20 @@ def solve_ctf_workstealing(
             return
 
         flag_val = _extract_flag(out)
+        effort.record(provider.value, elapsed, out, found_flag=bool(flag_val))
         if flag_val:
             _claim_flag(provider, st, flag_val)
             return
 
         # échec : on garde les trouvailles (bump) ; débat si TOUS ont tenté OU forcé.
         with lock:
-            st.findings.append(f"[{provider.value}] {summarize_attempt(out)}")
+            looped, cmd = detect_loop(out)
+            if looped:
+                st.findings.append(
+                    f"[{provider.value}] A BOUCLÉ sur `{cmd[:80]}` — {LOOP_WARNING_MESSAGE}"
+                )
+            else:
+                st.findings.append(f"[{provider.value}] {summarize_attempt(out)}")
             forced = (
                 control is not None and not st.solved and not st.debate_done
                 and st.ch.id in control.force_debate_ids()
@@ -402,6 +414,8 @@ def solve_ctf_workstealing(
     for t in threads:
         t.join()
     _publish()
+
+    print("=== Effort par agent ===\n" + effort.format_summary(), flush=True)
 
     results = [
         WSResult(
