@@ -40,6 +40,12 @@ from .client import CTFdChallenge, SubmissionResult
 # Point d'approbation : reçoit le nom du challenge, retourne True pour autoriser le débat.
 ApprovalGate = Callable[[str], bool]
 
+# Marqueurs de LIMITE D'USAGE d'un compte (l'agent n'a pas vraiment tenté).
+USAGE_LIMIT_MARKERS: tuple[str, ...] = (
+    "usage limit", "hit your usage", "rate limit", "quota",
+    "actionrequirederror", "insufficient_quota", "too many requests",
+)
+
 
 @dataclass
 class _ChallState:
@@ -160,6 +166,7 @@ def solve_ctf_workstealing(
     lock = threading.Lock()
     http_lock = threading.Lock()
     states: dict[int, _ChallState] = {}
+    dead: set[AgentProvider] = set()  # agents retirés (limite d'usage atteinte)
 
     for lc in listed:
         with http_lock:
@@ -258,9 +265,13 @@ def solve_ctf_workstealing(
             print(f"  ⏸ débat sur {st.ch.name} refusé (approbation humaine)", flush=True)
             return
         print(f"  💬 DÉBAT sur {st.ch.name} : tous bloqués, mise en commun…", flush=True)
+        live = [p for p in providers if p not in dead]  # pas d'agent à sec dans le débat
+        if not live:
+            st.debate = "débat impossible (tous les agents à sec)"
+            return
         pooled = "\n\n---\n\n".join(st.findings) or "(aucune trouvaille notable)"
         proposals: list[str] = []
-        for p in providers:
+        for p in live:
             obj = (
                 f"DÉBAT D'ÉQUIPE sur « {st.ch.name} ». Tous les agents ont tenté SANS "
                 f"trouver le flag. Voici ce qui a été tenté :\n\n{pooled}\n\n"
@@ -272,8 +283,8 @@ def solve_ctf_workstealing(
                 proposals.append(f"[{p.value}] {summarize_attempt(r.output, 800)}")
             _write_trace(data_root, st, p, "debat", r.output or "")
         conclusion = "\n\n".join(proposals) or "(pas de conclusion)"
-        # UN SEUL agent continue avec la conclusion du débat.
-        continuer = providers[0]
+        # UN SEUL agent (vivant) continue avec la conclusion du débat.
+        continuer = live[0]
         st.debate = f"débat ({len(providers)} agents) → continue: {continuer.value}"
         print(f"     conclusion prête → {continuer.value} continue seul", flush=True)
         obj = (
@@ -328,6 +339,16 @@ def solve_ctf_workstealing(
         out = result.output or ""
         _write_trace(data_root, st, provider, "essai", out)
 
+        # Limite d'usage du compte : l'agent n'a PAS vraiment tenté -> on le RETIRE du
+        # pool (sinon il cycle en échouant en 2s et pollue le déclenchement du débat).
+        if any(m in out.lower() for m in USAGE_LIMIT_MARKERS):
+            with lock:
+                dead.add(provider)
+                st.tried_by.discard(provider)  # ne compte pas comme une vraie tentative
+            print(f"     ⛔ {provider.value} : LIMITE D'USAGE atteinte → retiré du pool "
+                  f"(logout/login un autre compte pour le réactiver)", flush=True)
+            return
+
         if st.solved_event.is_set() and not result.success:
             with lock:
                 st.cancelled_providers.add(provider)
@@ -348,7 +369,7 @@ def solve_ctf_workstealing(
             )
             trigger_debate = forced or (
                 debate and not st.solved and not st.debate_done
-                and st.tried_by.issuperset(set(providers))
+                and st.tried_by.issuperset(set(providers) - dead)  # agents vivants seulement
             )
             if trigger_debate:
                 st.debate_done = True
@@ -360,6 +381,8 @@ def solve_ctf_workstealing(
 
     def agent_loop(provider: AgentProvider) -> None:
         while True:
+            if provider in dead:  # limite d'usage atteinte -> cet agent s'arrête
+                return
             if control is not None and control.stopped():
                 return
             while control is not None and control.paused() and not control.stopped():

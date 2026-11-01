@@ -198,3 +198,28 @@ def test_workstealing_spreads_agents_on_different_challenges(fake_home, tmp_path
                                exec_run=exec_run)
     assert s.solved == 3
     assert first_pick["claude"] != first_pick["codex"]  # pas le même challenge au départ
+
+
+def test_usage_limit_agent_is_removed(fake_home, tmp_path):
+    """Un agent à sec (limite d'usage) est retiré : il ne cycle pas, les autres bossent."""
+    import threading
+    http = _Http(3)
+    connector = CTFdConnector("https://x", token="t", http=http)
+    calls = {"claude": 0, "codex": 0, "cursor": 0}
+    lk = threading.Lock()
+
+    def exec_run(argv, timeout):
+        prov = "cursor" if "cursor-agent" in argv else ("claude" if "claude" in argv else "codex")
+        with lk:
+            calls[prov] += 1
+        if prov == "cursor":
+            return (0, "ActionRequiredError: You've hit your usage limit")  # à sec
+        n = next((c for c in "123" if f"t:{c}" in argv[-1]), "0")
+        return (0, f"FLAG: CTF{{solved{n}0000000}}")
+
+    s = solve_ctf_workstealing(connector, data_root=tmp_path / "d",
+                               difficulty=Difficulty.EASY, auto_submit=False,
+                               exec_run=exec_run)
+    assert s.solved == 3
+    assert calls["cursor"] <= 1              # retiré dès la 1re limite, ne cycle pas
+    assert all(r.winner is not None and r.winner.value != "cursor" for r in s.results)
