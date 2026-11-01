@@ -1,0 +1,53 @@
+# Arsenal HARD-CTF v2 : part du worker (arsenal + 3 CLI) et ajoute les outils lourds
+# qui comptent vraiment pour les challenges durs. Résilient : un outil qui échoue
+# est SAUTÉ (SKIP), il ne casse pas le build.
+#
+# Build (après fullctf-worker:latest) :
+#   docker build -f infrastructure/Dockerfile.hardctf -t fullctf-worker:latest .
+#   (ou : bash scripts/build_hardctf.sh  -> durable en tmux)
+
+FROM fullctf-worker:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GOPATH=/root/go
+ENV PATH="/root/go/bin:/usr/local/go/bin:/root/.local/bin:${PATH}"
+
+# --- apt : crypto (flint), pwn (ropper), build (cmake), go ---
+RUN apt-get update && for p in \
+      cmake pkg-config golang-go \
+      ropper \
+      libflint-dev libntl-dev libgmp-dev libmpfr-dev \
+      sagemath ; do \
+        apt-get install -y --no-install-recommends "$p" || echo "SKIP apt: $p" ; \
+      done ; \
+    rm -rf /var/lib/apt/lists/*
+
+# --- gem : seccomp-tools (pwn) ---
+RUN gem install --no-document seccomp-tools || echo "SKIP gem: seccomp-tools"
+
+# --- GEF (extension GDB puissante pour le pwn/reverse) ---
+RUN wget -q -O /root/.gdbinit-gef.py https://gef.blah.cat/py 2>/dev/null \
+    && echo "source /root/.gdbinit-gef.py" >> /root/.gdbinit \
+    || echo "SKIP gef"
+
+# --- libc-database (résolution d'offsets libc en pwn) ---
+RUN git clone --depth 1 https://github.com/niklasb/libc-database.git /opt/libc-database \
+    || echo "SKIP libc-database"
+
+# --- pwninit (prépare les challenges pwn : patchelf + libc) : binaire prébuilt ---
+RUN wget -q -O /usr/local/bin/pwninit \
+      https://github.com/io12/pwninit/releases/latest/download/pwninit \
+    && chmod +x /usr/local/bin/pwninit \
+    && pwninit --version 2>/dev/null \
+    || echo "SKIP pwninit"
+
+# --- outils web ProjectDiscovery (nuclei, httpx, dalfox) via go install ---
+RUN go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest || echo "SKIP nuclei"
+RUN go install github.com/projectdiscovery/httpx/cmd/httpx@latest || echo "SKIP httpx"
+RUN go install github.com/hahwul/dalfox/v2@latest || echo "SKIP dalfox"
+
+# --- ropper via pip en secours si apt l'a sauté ---
+RUN command -v ropper >/dev/null 2>&1 || pip3 install --no-cache-dir --break-system-packages ropper || echo "SKIP ropper"
+
+WORKDIR /work
+CMD ["/bin/bash"]
