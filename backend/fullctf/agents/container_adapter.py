@@ -110,7 +110,9 @@ class ContainerAgentAdapter(AgentAdapter):
         raise ValueError(f"fournisseur inconnu : {self.provider}")
 
     def _full_prompt(self, objective: str) -> str:
+        from ..playbooks.render import hardctf_method
         parts = [objective.strip() or "Résous ce challenge CTF autorisé et trouve le flag."]
+        parts.append(hardctf_method())  # méthode obligatoire : raisonnement + vérif
         if self.mode == ExecutionMode.CONNECTED and self.target:
             parts.append(f"CIBLE LIVE AUTORISÉE (reste strictement dessus) : {self.target}")
         else:
